@@ -41,7 +41,6 @@ class ROMSDownscalingDataset(Dataset):
         self.total_times = int(self.dataset.sizes['time'])
         self.valid_time_idx=self._valid_time_idx()
 
-
     def __len__(self) -> int:
         return len(self.valid_time_idx)
     
@@ -62,6 +61,7 @@ class ROMSDownscalingDataset(Dataset):
         return {'input': input_tensor, 'target': target_tensor, 'time_idx': idx}
 
     def _create_tensor(self, ds: xr.Dataset, stats: dict[str, dict[str, float]]) -> torch.Tensor:
+        # Normalized the tensor for each variable using the provided mean and std.
         tensors = []
         for var in ds.data_vars:
             da = ds[var]
@@ -83,6 +83,7 @@ class ROMSDownscalingDataset(Dataset):
         return torch.cat(tensors, dim=0)
 
     def _compute_stats(self, var_names: list[str], coarsen: bool = False) -> dict[str, dict[str, float]]:
+        # Compute mean and std for each variable, used to normalize later. 
         stats = {}
         for var in var_names:
             count = 0
