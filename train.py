@@ -82,9 +82,9 @@ def main(
     datasets = train_val_dataset(dataset, val_split=val_split)
     train_dataset = datasets['train']
     val_dataset = datasets['val']
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size)
-
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=torch.cuda.is_available(), persistent_workers=True)
+    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, num_workers=4, pin_memory=torch.cuda.is_available(), persistent_workers=True)
+    print('DATA LOADED')
     sample = dataset[0]
     cond_channels = sample["input"].shape[0]
     target_channels = sample["target"].shape[0]
@@ -124,12 +124,6 @@ def main(
             
 
 
-
-    
-
-    
-
-
 if __name__ == "__main__":  
-    main(Path('/home/mateuszm/downscaling_1/zarr/test.zarr'), val_split=0.1, checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp1'), max_epochs=20)
-
+    main(Path('/home/mateuszm/downscaling_1/zarr/test.zarr'), val_split=0.1, checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp1'), max_epochs=1000)
+    #main(Path('/home/mateuszm/downscaling_1/zarr/nk160_m71_20240501-20260531.zarr'), val_split=0.1, checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp1'), max_epochs=1000)
