@@ -114,7 +114,13 @@ def main(
 
         ckpt_path = checkpoint_output_dir / f"model_epoch_{epoch+1}.pt"
         checkpoint_output_dir.mkdir(parents=True, exist_ok=True)
-        torch.save(model.state_dict(), ckpt_path)
+        torch.save(
+            {
+                'epoch': epoch + 1,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+            }, ckpt_path)
             
 
 
