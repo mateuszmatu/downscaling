@@ -9,7 +9,7 @@ def open_zarr_dataset(
         path: Path
         ) -> xr.Dataset:
     """Open a zarr dataset and return it as an xarray Dataset."""
-    ds = xr.open_zarr(path, consolidated=False)
+    ds = xr.open_zarr(path, consolidated=False, chunks={"time": 1, "Y": 100, "X": 100})
     return ds
 
 class ROMSDownscalingDataset(Dataset):
@@ -33,6 +33,7 @@ class ROMSDownscalingDataset(Dataset):
             self.dataset = self.dataset.isel(ensemble=0)
 
         self.variable_names = list(self.dataset.attrs.get('variables', []))
+        self.var_to_idx = {var: i for i, var in enumerate(self.variable_names)}
 
         self.field_shape = (int(self.dataset.attrs.get('field_shape')[0]), int(self.dataset.attrs.get('field_shape')[1]))
         self.y_dim = 'Y'
@@ -40,7 +41,10 @@ class ROMSDownscalingDataset(Dataset):
 
         self.total_times = int(self.dataset.sizes['time'])
         self.valid_time_idx=self._valid_time_idx()
-
+        self.input_stats = self._compute_stats(self.input_vars, coarsen=True)
+        self.target_stats = self._compute_stats(self.target_vars, coarsen=False)
+        self.static_tensor = self._static_vars() if self.static_vars else None
+        
     def __len__(self) -> int:
         return len(self.valid_time_idx)
     
@@ -55,8 +59,9 @@ class ROMSDownscalingDataset(Dataset):
         input_high_res_ds = self._build_dataset(ds_idx, self.input_vars)
         input_low_res_ds = self._coarsen_dataset(input_high_res_ds, self.coarsen_factor)
 
-        input_tensor = self._create_tensor(input_low_res_ds, self._compute_stats(self.input_vars, coarsen=True))
-        target_tensor = self._create_tensor(target_ds, self._compute_stats(self.target_vars, coarsen=False))
+        input_tensor = self._create_tensor(input_low_res_ds, self.input_stats)
+        input_tensor = torch.cat((input_tensor, self.static_tensor), dim=0)
+        target_tensor = self._create_tensor(target_ds, self.target_stats)
 
         return {'input': input_tensor, 'target': target_tensor, 'time_idx': idx}
 
@@ -121,7 +126,7 @@ class ROMSDownscalingDataset(Dataset):
         data_vars = {}
         for var in var_names:
             ds = self.dataset.isel(time=time_idx)
-            variable_index = self.variable_names.index(var)
+            variable_index = self.var_to_idx[var]
             da = ds['data'].isel({'variable': variable_index})
             values = np.asarray(da.values, dtype=np.float32)
             ny, nx = self.field_shape
@@ -132,14 +137,18 @@ class ROMSDownscalingDataset(Dataset):
     def _valid_time_idx(self) -> list[int]:
         valid_times = []
         for t in range(self.total_times):
+            has_valid_target = False
             for var in self.target_vars:
                 ds = self.dataset.isel(time=t)
-                variable_index = self.variable_names.index(var)
+                variable_index = self.var_to_idx[var]
                 ds = ds['data'].isel(variable=variable_index)
                 values = np.asarray(ds.values)
                 if np.isfinite(values).any():
-                    valid_times.append(t)
-                
+                    has_valid_target = True
+                    break
+            if has_valid_target:
+                valid_times.append(t)
+
         return valid_times
 
     def _static_vars(self) -> torch.Tensor:
@@ -148,7 +157,20 @@ class ROMSDownscalingDataset(Dataset):
         for var in self.static_vars:
             ds = static_ds[var]
             ds_coarse = self._coarsen_dataset(ds.to_dataset(name=var), self.coarsen_factor)
-            static_stats = self._compute_stats([var], coarsen=True)
+            values = np.asarray(ds_coarse[var].values, dtype=np.float64)
+            mask = np.isfinite(values)
+            valid_values = values[mask]
+            count = int(valid_values.size)
+            sum = float(valid_values.sum())
+            sum_sq = float((valid_values ** 2).sum())
+            if count == 0:
+                mean = 0.0
+                std = 1.0
+            else:
+                mean = sum / count
+                variance = max((sum_sq / count) - (mean ** 2), 0.0)
+                std = np.sqrt(variance)
+            static_stats = {var: {'mean': mean, 'std': std}}
             tensor = self._create_tensor(ds_coarse, static_stats)
             tensors.append(tensor)
 
