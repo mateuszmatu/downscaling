@@ -46,12 +46,10 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
     model.load_state_dict(model_state)
     model.eval()
 
-    # Only first time for now
-
-    full_ds = xr.open_dataset(input_netcdf)
+    full_ds = xr.open_dataset(input_netcdf).isel(depth=0)
     predicted_field = np.zeros((full_ds.time.size, full_ds.Y.size, full_ds.X.size), dtype=np.float32)
     for t in range(full_ds.time.size):
-        ds = full_ds.isel(depth=0, time=t)['temperature']
+        ds = full_ds.isel(time=t)['temperature']
         coarse_ds = ds.coarsen(X=5, Y=5, boundary='trim').mean()
         coarse_field = np.nan_to_num(coarse_ds.values, nan=0.0, posinf=0.0, neginf=0.0)
         coarse_field = normalize(coarse_field)
@@ -66,13 +64,12 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
         predicted_field_t = sample(cond_tensor, model)
         predicted_field_t = denormalize(predicted_field_t, np.mean(coarse_field), np.std(coarse_field))
         predicted_field[t] = resize_field(predicted_field_t, ds.shape)
-        
-
 
     # Save the predicted field to a new NetCDF file
     predicted_ds = xr.Dataset(
         {
-            "predicted_temperature": (("time", "Y", "X"), predicted_field)
+            "predicted_temperature": (("time", "Y", "X"), predicted_field),
+            "input_temperature": (("time", "Y", "X"), full_ds['temperature'].values),
         },
         coords={
             "time": full_ds.time.values,
@@ -87,7 +84,7 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
     print('passed')
 
 if __name__ == "__main__":
-    checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp1/model_epoch_20.pt")
+    checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp1/model_epoch_7.pt")
     input_netcdf = Path('/home/mateuszm/downscaling_1/test_data/norkyst160_his_zdepth_20250101T00Z_m71_AN.nc')
     output_netcdf = Path('results/predicted_temperature.nc')
     main(checkpoint_path, input_netcdf, output_netcdf)
