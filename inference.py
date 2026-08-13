@@ -47,23 +47,37 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
     model.eval()
 
     # Only first time for now
-    ds = xr.open_dataset(input_netcdf).isel(depth=0, time=0)['temperature']
-    coarse_ds = ds.coarsen(X=5, Y=5, boundary='trim').mean()
-    coarse_field = np.nan_to_num(coarse_ds.values, nan=0.0, posinf=0.0, neginf=0.0)
-    coarse_field = normalize(coarse_field)
-    cond_tensor = torch.from_numpy(coarse_field).unsqueeze(0).unsqueeze(0).float().to(device)
-    predicted_field = sample(cond_tensor, model)
-    predicted_field = denormalize(predicted_field, np.mean(coarse_field), np.std(coarse_field))
-    predicted_field = resize_field(predicted_field, ds.shape)
+
+    full_ds = xr.open_dataset(input_netcdf)
+    predicted_field = np.zeros((full_ds.time.size, full_ds.Y.size, full_ds.X.size), dtype=np.float32)
+    for t in range(full_ds.time.size):
+        ds = full_ds.isel(depth=0, time=t)['temperature']
+        coarse_ds = ds.coarsen(X=5, Y=5, boundary='trim').mean()
+        coarse_field = np.nan_to_num(coarse_ds.values, nan=0.0, posinf=0.0, neginf=0.0)
+        coarse_field = normalize(coarse_field)
+        cond_tensor = torch.from_numpy(coarse_field).unsqueeze(0).unsqueeze(0).float().to(device)
+
+        h_coarse = full_ds['h'].coarsen(X=5, Y=5, boundary='trim').mean().values
+        h_coarse = np.nan_to_num(h_coarse, nan=0.0, posinf=0.0, neginf=0.0)
+        h_coarse = normalize(h_coarse)
+        h_tensor = torch.from_numpy(h_coarse).unsqueeze(0).unsqueeze(0).float().to(device)
+
+        cond_tensor = torch.cat((cond_tensor, h_tensor), dim=1)
+        predicted_field_t = sample(cond_tensor, model)
+        predicted_field_t = denormalize(predicted_field_t, np.mean(coarse_field), np.std(coarse_field))
+        predicted_field[t] = resize_field(predicted_field_t, ds.shape)
+        
+
 
     # Save the predicted field to a new NetCDF file
     predicted_ds = xr.Dataset(
         {
-            "predicted_temperature": (("Y", "X"), predicted_field)
+            "predicted_temperature": (("time", "Y", "X"), predicted_field)
         },
         coords={
-            "Y": ds.coords["Y"],
-            "X": ds.coords["X"]
+            "time": full_ds.time.values,
+            "Y": ds.coords["Y"].values,
+            "X": ds.coords["X"].values,
         }
     )
     predicted_ds.to_netcdf(output_netcdf)
@@ -73,7 +87,7 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
     print('passed')
 
 if __name__ == "__main__":
-    checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp1/model_epoch_1.pt")
+    checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp1/model_epoch_20.pt")
     input_netcdf = Path('/home/mateuszm/downscaling_1/test_data/norkyst160_his_zdepth_20250101T00Z_m71_AN.nc')
     output_netcdf = Path('results/predicted_temperature.nc')
     main(checkpoint_path, input_netcdf, output_netcdf)
