@@ -110,7 +110,7 @@ def main(
 
             with open(log_file, 'a') as f:
                 f.write(f"{epoch+1}, {loss.item():.4f}, {optimizer.param_groups[0]['lr']:.6f}\n")
-            print(f"Epoch [{epoch+1}/{max_epochs}], Loss: {loss.item():.4f}, lr: {optimizer.param_groups[0]['lr']:.6f}")
+            print(f"Epoch [{epoch+1}/{max_epochs}], Loss: {loss.item():.10f}, lr: {optimizer.param_groups[0]['lr']:.10f}")
 
         ckpt_path = checkpoint_output_dir / f"model_epoch_{epoch+1}.pt"
         checkpoint_output_dir.mkdir(parents=True, exist_ok=True)
@@ -125,5 +125,5 @@ def main(
 
 
 if __name__ == "__main__":  
-    main(Path('/home/mateuszm/downscaling_1/zarr/test.zarr'), val_split=0.1, checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp1'), max_epochs=1000)
-    #main(Path('/home/mateuszm/downscaling_1/zarr/nk160_m71_20240501-20260531.zarr'), val_split=0.1, checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp1'), max_epochs=1000)
+    #main(Path('/home/mateuszm/downscaling_1/zarr/test.zarr'), val_split=0.1, checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp1'), max_epochs=1000)
+    main(Path('/home/mateuszm/downscaling_1/zarr/nk160_m71_20240501-20260531.zarr'), val_split=0.1, checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp1'), max_epochs=1000)
