@@ -20,6 +20,7 @@ def one_step(
     device: torch.device,
     batch: dict,
     optimizer: torch.optim.Optimizer,
+    ema_model: AveragedModel,
 ) -> tuple[float, float]:
 
     x, cond, batch_size = batch["target"].to(device), batch["input"].to(device), batch["target"].shape[0]
@@ -31,6 +32,8 @@ def one_step(
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
     optimizer.step()
+
+    ema_model.update_parameters(model)
 
     return loss, prediction
 
@@ -71,6 +74,7 @@ def main(
     min_lr: float = 1e-5,
     max_epochs: int = 5,
     checkpoint_output_dir: Path = Path("checkpoints"),
+    ema_decay: float = 0.999, 
 ) -> None:
 
     log_file = make_log_file()
@@ -91,7 +95,7 @@ def main(
 
     model = UNet(in_channels=target_channels, cond_channels=cond_channels, base_channels=base_channels).to(device)
 
-    # Add EMA later
+    ema_model = AveragedModel(model, multi_avg_fn=get_ema_multi_avg_fn(decay=ema_decay)).to(device)
 
     #Learning rate
     total_epochs = 10
@@ -105,7 +109,7 @@ def main(
     for epoch in range(start_epoch, max_epochs):
         # Training step 
         for batch in train_loader:
-            loss, prediction = one_step(model, device, batch, optimizer)
+            loss, prediction = one_step(model, device, batch, optimizer, ema_model)
             scheduler.step()
 
             with open(log_file, 'a') as f:
@@ -120,10 +124,11 @@ def main(
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'scheduler_state_dict': scheduler.state_dict(),
+                'ema_model_state_dict': ema_model.module.state_dict(),
             }, ckpt_path)
             
 
 
 if __name__ == "__main__":  
-    #main(Path('/home/mateuszm/downscaling_1/zarr/test.zarr'), val_split=0.1, checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp1'), max_epochs=1000)
-    main(Path('/home/mateuszm/downscaling_1/zarr/nk160_m71_20240501-20260531.zarr'), val_split=0.1, checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp1'), max_epochs=1000)
+    main(Path('/home/mateuszm/downscaling_1/zarr/test.zarr'), val_split=0.1, checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp1'), max_epochs=1000)
+    #main(Path('/home/mateuszm/downscaling_1/zarr/nk160_m71_20240501-20260531.zarr'), val_split=0.1, checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp1'), max_epochs=1000)
