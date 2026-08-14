@@ -32,8 +32,10 @@ class DoubleConv(nn.Module):
         super(DoubleConv, self).__init__()
         self.double_conv = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True)
         )
 
@@ -84,6 +86,8 @@ class UNet(nn.Module):
         self.up2 = Up(base_channels * 4, base_channels * 2)
         self.up1 = Up(base_channels * 2, base_channels)
         self.outc = nn.Conv2d(base_channels, in_channels, kernel_size=1)
+        nn.init.zeros_(self.outc.weight)
+        nn.init.zeros_(self.outc.bias)
 
     def forward(self, x: torch.Tensor, cond: torch.Tensor, timesteps: torch.Tensor) -> torch.Tensor:
 

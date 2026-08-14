@@ -35,7 +35,7 @@ def one_step(
 
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
-    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
     optimizer.step()
 
     ema_model.update_parameters(model)
@@ -67,7 +67,7 @@ def make_log_file(dir: Path = Path('logs'), filename: str = "training_log.txt") 
         dir.mkdir(parents=True, exist_ok=True)
         log_file.touch()
     with open (log_file, 'w') as f:
-        f.write("Epoch, Train Loss, Val Loss, Learning Rate\n")
+        f.write("Epoch, Loss, LR\n")
 
     return log_file
 
@@ -94,8 +94,8 @@ def main(
     batch_size: int = 16,
     val_split: float = 0.1,
     base_channels: int = 32,
-    lr: float = 1e-3,
-    min_lr: float = 1e-5,
+    lr: float = 1e-4,
+    min_lr: float = 1e-7,
     max_epochs: int = 5,
     checkpoint_output_dir: Path = Path("checkpoints"),
     ema_decay: float = 0.999, 
@@ -139,7 +139,7 @@ def main(
             scheduler.step()
 
             with open(log_file, 'a') as f:
-                f.write(f"{epoch+1}, {loss.item():.10f}, , {optimizer.param_groups[0]['lr']:.10f}\n")
+                f.write(f"{epoch+1}, {loss.item():.10f}, {optimizer.param_groups[0]['lr']:.10f}\n")
             print(f"Epoch {epoch+1}/{max_epochs}, Loss: {loss.item():.10f}, Learning Rate: {optimizer.param_groups[0]['lr']:.10f}")
 
         #validate

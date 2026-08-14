@@ -78,9 +78,9 @@ class ROMSDownscalingDataset(Dataset):
                 da = da.expand_dims('depth', axis=0)
             da = da.transpose('depth', self.y_dim, self.x_dim)
             array = np.asarray(da.values, dtype=np.float32)
-            array = np.nan_to_num(array, nan=0.0, posinf=0.0, neginf=0.0)
             tensor = torch.from_numpy(array)
             mean, std = stats[var]['mean'], stats[var]['std']
+            tensor = torch.nan_to_num(tensor, nan=mean, posinf=mean, neginf=mean)
             tensor = (tensor - mean) / std
 
             tensors.append(tensor)
@@ -114,7 +114,7 @@ class ROMSDownscalingDataset(Dataset):
             else:
                 mean = sum / count
                 variance = max((sum_sq / count) - (mean ** 2), 0.0)
-                std = np.sqrt(variance)
+                std = max(np.sqrt(variance), 1e-8)
 
             stats[var] = {'mean': mean, 'std': std}
         return stats
