@@ -15,6 +15,14 @@ def train_val_dataset(dataset, val_split=0.1):
     datasets['val'] = torch.utils.data.Subset(dataset, val_idx)
     return datasets
 
+def compute_loss(model: UNet, device: torch.device, batch: dict) -> tuple[float]:
+    x, cond, batch_size = batch["target"].to(device), batch["input"].to(device), batch["target"].shape[0]
+    t0 = torch.zeros(batch_size, dtype=torch.long, device=device)
+    x0 = torch.zeros_like(x)
+    prediction = model(x0, cond, t0)
+    loss = F.mse_loss(prediction, x)
+    return loss
+
 def one_step(
     model: UNet,
     device: torch.device,
@@ -23,19 +31,35 @@ def one_step(
     ema_model: AveragedModel,
 ) -> tuple[float, float]:
 
-    x, cond, batch_size = batch["target"].to(device), batch["input"].to(device), batch["target"].shape[0]
-    t0 = torch.zeros(batch_size, dtype=torch.long, device=device)
-    x0 = torch.zeros_like(x)
-    prediction = model(x0, cond, t0)
-    loss = F.mse_loss(prediction, x)
+    loss = compute_loss(model, device, batch)
 
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     optimizer.step()
 
     ema_model.update_parameters(model)
 
-    return loss, prediction
+    return loss
+
+@torch.no_grad()
+def validate(
+    model: UNet,
+    device: torch.device,
+    val_loader: torch.utils.data.DataLoader,
+) -> float:
+    #set model to evaluation mode
+    model.eval()
+    total_loss = 0.0
+    total_batches = 0
+
+    for batch in val_loader:
+        loss  = compute_loss(model, device, batch)
+        total_loss += loss.item()
+        total_batches += 1
+
+    model.train()
+    return total_loss / max(1, total_batches)
 
 def make_log_file(dir: Path = Path('logs'), filename: str = "training_log.txt") -> None:
     log_file = dir / filename
@@ -43,7 +67,7 @@ def make_log_file(dir: Path = Path('logs'), filename: str = "training_log.txt") 
         dir.mkdir(parents=True, exist_ok=True)
         log_file.touch()
     with open (log_file, 'w') as f:
-        f.write("Epoch, Loss, Learning Rate\n")
+        f.write("Epoch, Train Loss, Val Loss, Learning Rate\n")
 
     return log_file
 
@@ -98,34 +122,42 @@ def main(
     ema_model = AveragedModel(model, multi_avg_fn=get_ema_multi_avg_fn(decay=ema_decay)).to(device)
 
     #Learning rate
-    total_epochs = 10
     steps_per_epoch = len(train_loader)
-    total_steps = steps_per_epoch * total_epochs
+    total_steps = steps_per_epoch * max_epochs
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=min_lr)
     start_epoch = 0
+    best_val_loss = float("inf")
 
     for epoch in range(start_epoch, max_epochs):
+        model.train() # set model to training mode
+
         # Training step 
         for batch in train_loader:
-            loss, prediction = one_step(model, device, batch, optimizer, ema_model)
+            loss = one_step(model, device, batch, optimizer, ema_model)
             scheduler.step()
 
             with open(log_file, 'a') as f:
-                f.write(f"{epoch+1}, {loss.item():.4f}, {optimizer.param_groups[0]['lr']:.6f}\n")
-            print(f"Epoch [{epoch+1}/{max_epochs}], Loss: {loss.item():.10f}, lr: {optimizer.param_groups[0]['lr']:.10f}")
+                f.write(f"{epoch+1}, {loss.item():.10f}, , {optimizer.param_groups[0]['lr']:.10f}\n")
+            print(f"Epoch {epoch+1}/{max_epochs}, Loss: {loss.item():.10f}, Learning Rate: {optimizer.param_groups[0]['lr']:.10f}")
 
-        ckpt_path = checkpoint_output_dir / f"model_epoch_{epoch+1}.pt"
-        checkpoint_output_dir.mkdir(parents=True, exist_ok=True)
-        torch.save(
-            {
-                'epoch': epoch + 1,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'scheduler_state_dict': scheduler.state_dict(),
-                'ema_model_state_dict': ema_model.module.state_dict(),
-            }, ckpt_path)
+        #validate
+        val_loss = validate(ema_model.module, device, val_loader)
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            ckpt_path = checkpoint_output_dir / "best_model.pt"
+            checkpoint_output_dir.mkdir(parents=True, exist_ok=True)
+            torch.save(
+                {
+                    'epoch': epoch + 1,
+                    'best_val_loss': best_val_loss,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'scheduler_state_dict': scheduler.state_dict(),
+                    'ema_model_state_dict': ema_model.module.state_dict(),
+                }, ckpt_path)
             
 
 
