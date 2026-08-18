@@ -67,7 +67,7 @@ def make_log_file(dir: Path = Path('logs'), filename: str = "training_log.txt") 
         dir.mkdir(parents=True, exist_ok=True)
         log_file.touch()
     with open (log_file, 'w') as f:
-        f.write("Epoch, Loss, LR\n")
+        f.write("Epoch, Loss, Val Loss, LR\n")
 
     return log_file
 
@@ -138,12 +138,13 @@ def main(
             loss = one_step(model, device, batch, optimizer, ema_model)
             scheduler.step()
 
-            with open(log_file, 'a') as f:
-                f.write(f"{epoch+1}, {loss.item():.10f}, {optimizer.param_groups[0]['lr']:.10f}\n")
-            print(f"Epoch {epoch+1}/{max_epochs}, Loss: {loss.item():.10f}, Learning Rate: {optimizer.param_groups[0]['lr']:.10f}")
-
         #validate
         val_loss = validate(ema_model.module, device, val_loader)
+
+        #log training and validation lossa
+        with open(log_file, 'a') as f:
+            f.write(f"{epoch+1}, {loss.item():.10f}, {val_loss:.10f}, {optimizer.param_groups[0]['lr']:.10f}\n")
+        print(f"Epoch {epoch+1}/{max_epochs}, Loss: {loss.item():.10f}, Learning Rate: {optimizer.param_groups[0]['lr']:.10f}")
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -162,5 +163,5 @@ def main(
 
 
 if __name__ == "__main__":  
-    main(Path('/home/mateuszm/downscaling_1/zarr/test.zarr'), val_split=0.1, checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp1'), max_epochs=1000)
-    #main(Path('/home/mateuszm/downscaling_1/zarr/nk160_m71_20240501-20260531.zarr'), val_split=0.1, checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp1'), max_epochs=1000)
+    #main(Path('/home/mateuszm/downscaling_1/zarr/test.zarr'), val_split=0.1, checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp1'), max_epochs=1000)
+    main(Path('/home/mateuszm/downscaling_1/zarr/nk160_m71_20240501-20260531.zarr'), val_split=0.1, checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp2'), max_epochs=1000)
