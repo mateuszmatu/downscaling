@@ -74,8 +74,8 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
 
         cond_tensor = torch.cat((cond_tensor, h_tensor), dim=1)
         predicted_field_t = sample(cond_tensor, model)
-        predicted_field_t = denormalize(predicted_field_t, target_mean, target_std)
-        predicted_field[t] = resize_field(predicted_field_t, ds.shape)
+        resized = resize_field(predicted_field_t, ds.shape)
+        predicted_field[t] = denormalize(resized + predicted_field_t, target_mean, target_std)
 
     # Save the predicted field to a new NetCDF file
     predicted_ds = xr.Dataset(
