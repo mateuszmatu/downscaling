@@ -130,6 +130,13 @@ class ROMSDownscalingDataset(Dataset):
             ds = self.dataset.isel(time=time_idx)
             variable_index = self.var_to_idx[var]
             da = ds['data'].isel({'variable': variable_index})
+            # Remove any non-spatial dimensions (depth, time, etc.)
+            for dim in da.dims:
+                if dim not in [self.y_dim, self.x_dim]:
+                    if da.sizes[dim] > 1:
+                        da = da.isel({dim: 0})
+                    else:
+                        da = da.squeeze(dim)
             values = np.asarray(da.load().values, dtype=np.float32)
             ny, nx = self.field_shape
             grid = values.reshape(ny, nx)
@@ -144,7 +151,14 @@ class ROMSDownscalingDataset(Dataset):
                 ds = self.dataset.isel(time=t)
                 variable_index = self.var_to_idx[var]
                 ds = ds['data'].isel(variable=variable_index)
-                values = np.asarray(ds.values)
+                # Remove any non-spatial dimensions
+                for dim in ds.dims:
+                    if dim not in [self.y_dim, self.x_dim]:
+                        if ds.sizes[dim] > 1:
+                            ds = ds.isel({dim: 0})
+                        else:
+                            ds = ds.squeeze(dim)
+                values = np.asarray(ds.load().values)
                 if np.isfinite(values).any():
                     has_valid_target = True
                     break
