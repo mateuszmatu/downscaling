@@ -16,12 +16,15 @@ def train_val_dataset(dataset, val_split=0.1):
     datasets['val'] = torch.utils.data.Subset(dataset, val_idx)
     return datasets
 
-def compute_loss(model: UNet, device: torch.device, batch: dict) -> tuple[float]:
+def compute_loss(model: UNet, device: torch.device, batch: dict, target_channels: int) -> tuple[float]:
     x, cond, batch_size = batch["target"].to(device), batch["input"].to(device), batch["target"].shape[0]
     t0 = torch.zeros(batch_size, dtype=torch.long, device=device)
     x0 = torch.zeros_like(x)
     prediction = model(x0, cond, t0)
-    loss = F.mse_loss(prediction, x)
+    coarse = cond[:, :target_channels]
+    coarse = F.interpolate(coarse, size=x.shape[-2:], mode='bilinear', align_corners=False)
+    residual = x - coarse
+    loss = F.mse_loss(prediction, residual)
     return loss
 
 def one_step(
@@ -30,9 +33,10 @@ def one_step(
     batch: dict,
     optimizer: torch.optim.Optimizer,
     ema_model: AveragedModel,
+    target_channels: int,
 ) -> tuple[float, float]:
 
-    loss = compute_loss(model, device, batch)
+    loss = compute_loss(model, device, batch, target_channels)
 
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
@@ -48,6 +52,7 @@ def validate(
     model: UNet,
     device: torch.device,
     val_loader: torch.utils.data.DataLoader,
+    target_channels: int,
 ) -> float:
     #set model to evaluation mode
     model.eval()
@@ -55,7 +60,7 @@ def validate(
     total_batches = 0
 
     for batch in val_loader:
-        loss  = compute_loss(model, device, batch)
+        loss  = compute_loss(model, device, batch, target_channels)
         total_loss += loss.item()
         total_batches += 1
 
@@ -139,11 +144,11 @@ def main(
 
         # Training step 
         for batch in train_loader:
-            loss = one_step(model, device, batch, optimizer, ema_model)
+            loss = one_step(model, device, batch, optimizer, ema_model, target_channels)
             scheduler.step()
 
         #validate
-        val_loss = validate(ema_model.module, device, val_loader)
+        val_loss = validate(ema_model.module, device, val_loader, target_channels)
 
         #log training and validation lossa
         with open(log_file, 'a') as f:
