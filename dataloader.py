@@ -130,7 +130,7 @@ class ROMSDownscalingDataset(Dataset):
             ds = self.dataset.isel(time=time_idx)
             variable_index = self.var_to_idx[var]
             da = ds['data'].isel({'variable': variable_index})
-            values = np.asarray(da.values, dtype=np.float32)
+            values = np.asarray(da.load().values, dtype=np.float32)
             ny, nx = self.field_shape
             grid = values.reshape(ny, nx)
             data_vars[var] = xr.DataArray(grid, dims=(self.y_dim, self.x_dim), name=var)
