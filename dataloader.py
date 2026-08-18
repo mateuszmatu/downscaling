@@ -87,15 +87,16 @@ class ROMSDownscalingDataset(Dataset):
 
         return torch.cat(tensors, dim=0)
 
-    def _compute_stats(self, var_names: list[str], coarsen: bool = False) -> dict[str, dict[str, float]]:
+    def _compute_stats(self, var_names: list[str], coarsen: bool = False, time_indices: list[int] | None = None) -> dict[str, dict[str, float]]:
         # Compute mean and std for each variable, used to normalize later. 
         stats = {}
+        indices = self.valid_time_idx if time_indices is None else time_indices
         for var in var_names:
             count = 0
             sum = 0.0
             sum_sq = 0.0
 
-            for t in self.valid_time_idx:
+            for t in indices:
                 da = self._build_dataset(t, [var])
                 if coarsen:
                     da = self._coarsen_dataset(da, self.coarsen_factor)
