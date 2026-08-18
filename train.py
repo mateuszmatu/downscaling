@@ -2,14 +2,15 @@
 import dataloader as dataloader
 import torch
 from pathlib import Path
-from sklearn.model_selection import train_test_split
 from unet import UNet
 from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 import torch.nn.functional as F
 import numpy as np
 
 def train_val_dataset(dataset, val_split=0.1):
-    train_idx, val_idx = train_test_split(list(range(len(dataset))), test_size=val_split)
+    split_idx = int(len(dataset) * (1 - val_split))
+    train_idx = list(range(0, split_idx))
+    val_idx = list(range(split_idx, len(dataset)))
     datasets = {}
     datasets['train'] = torch.utils.data.Subset(dataset, train_idx)
     datasets['val'] = torch.utils.data.Subset(dataset, val_idx)
