@@ -162,6 +162,9 @@ def main(
                     'optimizer_state_dict': optimizer.state_dict(),
                     'scheduler_state_dict': scheduler.state_dict(),
                     'ema_model_state_dict': ema_model.module.state_dict(),
+                    'input_stats': dataset.input_stats,
+                    'target_stats': dataset.target_stats,
+                    'static_stats': dataset.static_stats,
                 }, ckpt_path)
             
 

@@ -43,6 +43,7 @@ class ROMSDownscalingDataset(Dataset):
         self.valid_time_idx=self._valid_time_idx()
         self.input_stats = self._compute_stats(self.input_vars, coarsen=True)
         self.target_stats = self._compute_stats(self.target_vars, coarsen=False)
+        self.static_stats = {}
         self.static_tensor = self._static_vars() if self.static_vars else None
         
     def __len__(self) -> int:
@@ -171,6 +172,7 @@ class ROMSDownscalingDataset(Dataset):
                 mean = sum / count
                 variance = max((sum_sq / count) - (mean ** 2), 0.0)
                 std = np.sqrt(variance)
+            self.static_stats[var] = {'mean': mean, 'std': std}
             static_stats = {var: {'mean': mean, 'std': std}}
             tensor = self._create_tensor(ds_coarse, static_stats)
             tensors.append(tensor)
