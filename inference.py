@@ -32,7 +32,7 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     checkpoint = torch.load(checkpoint_path, map_location=device)
-    model_state = checkpoint['model_state_dict']
+    model_state = checkpoint['ema_model_state_dict']
     for key, value in model_state.items():
         if key.endswith('inc.double_conv.0.weight'):
             inc_weight = value
@@ -84,7 +84,7 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
     print('passed')
 
 if __name__ == "__main__":
-    checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp1/model_epoch_7.pt")
+    checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp1/best_model.pt")
     input_netcdf = Path('/home/mateuszm/downscaling_1/test_data/norkyst160_his_zdepth_20250101T00Z_m71_AN.nc')
     output_netcdf = Path('results/predicted_temperature.nc')
     main(checkpoint_path, input_netcdf, output_netcdf)
