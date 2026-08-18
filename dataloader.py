@@ -9,7 +9,7 @@ def open_zarr_dataset(
         path: Path
         ) -> xr.Dataset:
     """Open a zarr dataset and return it as an xarray Dataset."""
-    ds = xr.open_zarr(path, consolidated=False, chunks={"time": 1, "Y": 100, "X": 100})
+    ds = xr.open_zarr(path, consolidated=False, chunks={"time": 1, "cell": 10000})
     return ds
 
 class ROMSDownscalingDataset(Dataset):
@@ -130,17 +130,20 @@ class ROMSDownscalingDataset(Dataset):
             ds = self.dataset.isel(time=time_idx)
             variable_index = self.var_to_idx[var]
             da = ds['data'].isel({'variable': variable_index})
-            # Remove any non-spatial dimensions (depth, time, etc.)
-            for dim in da.dims:
-                if dim not in [self.y_dim, self.x_dim]:
+            
+            for dim in list(da.dims):
+                if dim == 'cell':
+                    values = np.asarray(da.load().values, dtype=np.float32)
+                    ny, nx = self.field_shape
+                    grid = values.reshape(ny, nx)
+                    da = xr.DataArray(grid, dims=(self.y_dim, self.x_dim), name=var)
+                elif dim not in [self.y_dim, self.x_dim]:
                     if da.sizes[dim] > 1:
                         da = da.isel({dim: 0})
                     else:
                         da = da.squeeze(dim)
-            values = np.asarray(da.load().values, dtype=np.float32)
-            ny, nx = self.field_shape
-            grid = values.reshape(ny, nx)
-            data_vars[var] = xr.DataArray(grid, dims=(self.y_dim, self.x_dim), name=var)
+            
+            data_vars[var] = da
         return xr.Dataset(data_vars=data_vars)  
 
     def _valid_time_idx(self) -> list[int]:
@@ -151,13 +154,14 @@ class ROMSDownscalingDataset(Dataset):
                 ds = self.dataset.isel(time=t)
                 variable_index = self.var_to_idx[var]
                 ds = ds['data'].isel(variable=variable_index)
-                # Remove any non-spatial dimensions
-                for dim in ds.dims:
-                    if dim not in [self.y_dim, self.x_dim]:
+                
+                for dim in list(ds.dims):
+                    if dim not in [self.y_dim, self.x_dim, 'cell']:
                         if ds.sizes[dim] > 1:
                             ds = ds.isel({dim: 0})
                         else:
                             ds = ds.squeeze(dim)
+                
                 values = np.asarray(ds.load().values)
                 if np.isfinite(values).any():
                     has_valid_target = True
