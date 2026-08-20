@@ -34,14 +34,18 @@ def one_step(
     optimizer: torch.optim.Optimizer,
     ema_model: AveragedModel,
     target_channels: int,
+    scaler: torch.amp.GradScaler,
 ) -> tuple[float, float]:
 
-    loss = compute_loss(model, device, batch, target_channels)
+    with torch.autocast(device.type, enabled=(device.type == 'cuda')):
+        loss = compute_loss(model, device, batch, target_channels)
 
     optimizer.zero_grad(set_to_none=True)
-    loss.backward()
+    scaler.scale(loss).backward()
+    scaler.unscale_(optimizer)
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1)
-    optimizer.step()
+    scaler.step(optimizer)
+    scaler.update()
 
     ema_model.update_parameters(model)
 
@@ -116,9 +120,9 @@ def main(
     datasets = train_val_dataset(dataset, val_split=val_split)
     train_dataset = datasets['train']
     val_dataset = datasets['val']
-    train_idx = [train_dataset.indices]
+    train_idx = train_dataset.indices
     dataset.input_stats = dataset._compute_stats(dataset.input_vars, coarsen=True, time_indices=train_idx)
-    dataset.target_stats = dataset._compute_stats(dataset.target_vars, coarsen=True, time_indices=train_idx)
+    dataset.target_stats = dataset._compute_stats(dataset.target_vars, coarsen=False, time_indices=train_idx)
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=torch.cuda.is_available(), persistent_workers=True)
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, num_workers=4, pin_memory=torch.cuda.is_available(), persistent_workers=True)
     print('DATA LOADED')
@@ -127,6 +131,8 @@ def main(
     target_channels = sample["target"].shape[0]
 
     model = UNet(in_channels=target_channels, cond_channels=cond_channels, base_channels=base_channels).to(device)
+    if device.type == 'cuda':
+        model = torch.compile(model)
 
     ema_model = AveragedModel(model, multi_avg_fn=get_ema_multi_avg_fn(decay=ema_decay)).to(device)
 
@@ -134,6 +140,7 @@ def main(
     steps_per_epoch = len(train_loader)
     total_steps = steps_per_epoch * max_epochs
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    scaler = torch.amp.GradScaler(device.type, enabled=(device.type == 'cuda'))
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=min_lr)
     start_epoch = 0
@@ -144,7 +151,7 @@ def main(
 
         # Training step 
         for batch in train_loader:
-            loss = one_step(model, device, batch, optimizer, ema_model, target_channels)
+            loss = one_step(model, device, batch, optimizer, ema_model, target_channels, scaler)
             scheduler.step()
 
         #validate
