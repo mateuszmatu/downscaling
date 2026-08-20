@@ -101,8 +101,23 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
 
     print('passed')
 
+def plot_predicted_field(ds, time_index: int) -> None:
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(12, 6))
+    plt.subplot(1, 2, 1)
+    plt.imshow(ds['input_temperature'].values[time_index], cmap='viridis', origin='lower')
+    plt.title('Input Field')
+    plt.colorbar()
+    plt.subplot(1, 2, 2)
+    plt.imshow(ds['predicted_temperature'].values[time_index], cmap='viridis', origin='lower')
+    plt.title('Predicted Field')
+    plt.colorbar()
+    plt.tight_layout()
+    plt.savefig('results/predicted_field_comparison.png')
+
 if __name__ == "__main__":
     checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp2/best_model.pt")
     input_netcdf = Path('/home/mateuszm/downscaling_1/test_data/norkyst160_his_zdepth_20250101T00Z_m71_AN.nc')
     output_netcdf = Path('results/predicted_temperature.nc')
     main(checkpoint_path, input_netcdf, output_netcdf)
+    plot_predicted_field(xr.open_dataset('results/predicted_temperature.nc'), time_index=0)
