@@ -28,11 +28,16 @@ def sample(cond: torch.Tensor, model: UNet) -> np.ndarray:
 def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_channels: int = 32) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    except TypeError:
+        checkpoint = torch.load(checkpoint_path, map_location=device)
     model_state = checkpoint['ema_model_state_dict']
     input_stats = checkpoint['input_stats']
     target_stats = checkpoint['target_stats']
     static_stats = checkpoint.get('static_stats', {})
+    # Strip _orig_mod. prefix added by torch.compile if present
+    model_state = {k.replace('_orig_mod.', ''): v for k, v in model_state.items()}
     for key, value in model_state.items():
         if key.endswith('inc.double_conv.0.weight'):
             inc_weight = value
@@ -74,8 +79,9 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
 
         cond_tensor = torch.cat((cond_tensor, h_tensor), dim=1)
         predicted_field_t = sample(cond_tensor, model)
-        resized = resize_field(predicted_field_t, ds.shape)
-        predicted_field[t] = denormalize(resized + predicted_field_t, target_mean, target_std)
+        residual_resized = resize_field(predicted_field_t, ds.shape)
+        coarse_resized = resize_field(coarse_field, ds.shape)
+        predicted_field[t] = denormalize(residual_resized + coarse_resized, target_mean, target_std)
 
     # Save the predicted field to a new NetCDF file
     predicted_ds = xr.Dataset(
@@ -96,7 +102,7 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
     print('passed')
 
 if __name__ == "__main__":
-    checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp1/best_model.pt")
+    checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp2/best_model.pt")
     input_netcdf = Path('/home/mateuszm/downscaling_1/test_data/norkyst160_his_zdepth_20250101T00Z_m71_AN.nc')
     output_netcdf = Path('results/predicted_temperature.nc')
     main(checkpoint_path, input_netcdf, output_netcdf)

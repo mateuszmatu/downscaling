@@ -1,5 +1,6 @@
 
-import dataloader as dataloader
+import dataloader_improved as dataloader
+import time
 import torch
 from pathlib import Path
 from unet import UNet
@@ -64,7 +65,8 @@ def validate(
     total_batches = 0
 
     for batch in val_loader:
-        loss  = compute_loss(model, device, batch, target_channels)
+        with torch.autocast(device.type, enabled=(device.type == 'cuda')):
+            loss  = compute_loss(model, device, batch, target_channels)
         total_loss += loss.item()
         total_batches += 1
 
@@ -111,8 +113,12 @@ def main(
     ema_decay: float = 0.999, 
 ) -> None:
 
+    _t_start = time.perf_counter()
     log_file = make_log_file()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if device.type == 'cuda':
+        torch.backends.cudnn.benchmark = True
+        torch.set_float32_matmul_precision('high')
     if checkpoint is not None:
         ckpt = torch.load(checkpoint, map_location=device)
 
@@ -123,9 +129,9 @@ def main(
     train_time_indices = [dataset.valid_time_idx[i] for i in train_dataset.indices]
     dataset.input_stats = dataset._compute_stats(dataset.input_vars, coarsen=True, time_indices=train_time_indices)
     dataset.target_stats = dataset._compute_stats(dataset.target_vars, coarsen=False, time_indices=train_time_indices)
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=torch.cuda.is_available(), persistent_workers=True)
-    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, num_workers=4, pin_memory=torch.cuda.is_available(), persistent_workers=True)
-    print('DATA LOADED')
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=torch.cuda.is_available())
+    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, num_workers=0, pin_memory=torch.cuda.is_available())
+    print(f'DATA LOADED ({time.perf_counter() - _t_start:.1f}s)')
     sample = dataset[0]
     cond_channels = sample["input"].shape[0]
     target_channels = sample["target"].shape[0]
@@ -166,14 +172,17 @@ def main(
             best_val_loss = val_loss
             ckpt_path = checkpoint_output_dir / "best_model.pt"
             checkpoint_output_dir.mkdir(parents=True, exist_ok=True)
+            # Unwrap torch.compile's OptimizedModule so state dict keys have no _orig_mod. prefix
+            raw_model = model._orig_mod if hasattr(model, '_orig_mod') else model
+            raw_ema   = ema_model.module._orig_mod if hasattr(ema_model.module, '_orig_mod') else ema_model.module
             torch.save(
                 {
                     'epoch': epoch + 1,
                     'best_val_loss': best_val_loss,
-                    'model_state_dict': model.state_dict(),
+                    'model_state_dict': raw_model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'scheduler_state_dict': scheduler.state_dict(),
-                    'ema_model_state_dict': ema_model.module.state_dict(),
+                    'ema_model_state_dict': raw_ema.state_dict(),
                     'input_stats': dataset.input_stats,
                     'target_stats': dataset.target_stats,
                     'static_stats': dataset.static_stats,
