@@ -154,19 +154,25 @@ def main(
 
     for epoch in range(start_epoch, max_epochs):
         model.train() # set model to training mode
+        epoch_train_loss = 0.0
+        train_batches = 0
 
         # Training step 
         for batch in train_loader:
             loss = one_step(model, device, batch, optimizer, ema_model, target_channels, scaler)
+            epoch_train_loss += loss.item()
+            train_batches += 1
             scheduler.step()
+
+        train_loss = epoch_train_loss / max(1, train_batches)
 
         #validate
         val_loss = validate(ema_model.module, device, val_loader, target_channels)
 
         #log training and validation lossa
         with open(log_file, 'a') as f:
-            f.write(f"{epoch+1}, {loss.item():.10f}, {val_loss:.10f}, {optimizer.param_groups[0]['lr']:.10f}\n")
-        print(f"Epoch {epoch+1}/{max_epochs}, Loss: {loss.item():.10f}, Learning Rate: {optimizer.param_groups[0]['lr']:.10f}")
+            f.write(f"{epoch+1}, {train_loss:.10f}, {val_loss:.10f}, {optimizer.param_groups[0]['lr']:.10f}\n")
+        print(f"Epoch {epoch+1}/{max_epochs}, Loss: {train_loss:.10f}, Learning Rate: {optimizer.param_groups[0]['lr']:.10f}")
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
