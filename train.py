@@ -120,9 +120,9 @@ def main(
     datasets = train_val_dataset(dataset, val_split=val_split)
     train_dataset = datasets['train']
     val_dataset = datasets['val']
-    train_idx = train_dataset.indices
-    dataset.input_stats = dataset._compute_stats(dataset.input_vars, coarsen=True, time_indices=train_idx)
-    dataset.target_stats = dataset._compute_stats(dataset.target_vars, coarsen=False, time_indices=train_idx)
+    train_time_indices = [dataset.valid_time_idx[i] for i in train_dataset.indices]
+    dataset.input_stats = dataset._compute_stats(dataset.input_vars, coarsen=True, time_indices=train_time_indices)
+    dataset.target_stats = dataset._compute_stats(dataset.target_vars, coarsen=False, time_indices=train_time_indices)
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=torch.cuda.is_available(), persistent_workers=True)
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, num_workers=4, pin_memory=torch.cuda.is_available(), persistent_workers=True)
     print('DATA LOADED')
