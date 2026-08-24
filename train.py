@@ -193,6 +193,23 @@ def main(
                     'target_stats': dataset.target_stats,
                     'static_stats': dataset.static_stats,
                 }, ckpt_path)
+
+        ckpt_path = checkpoint_output_dir / f"model_epoch_last.pt"
+        checkpoint_output_dir.mkdir(parents=True, exist_ok=True)
+        raw_model = model._orig_mod if hasattr(model, '_orig_mod') else model
+        raw_ema   = ema_model.module._orig_mod if hasattr(ema_model.module, '_orig_mod') else ema_model.module
+        torch.save(
+            {
+                'epoch': epoch + 1,
+                'best_val_loss': best_val_loss,
+                'model_state_dict': raw_model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'ema_model_state_dict': raw_ema.state_dict(),
+                'input_stats': dataset.input_stats,
+                'target_stats': dataset.target_stats,
+                'static_stats': dataset.static_stats,
+            }, ckpt_path)
             
 
 
