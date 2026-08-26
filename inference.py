@@ -108,14 +108,19 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
 
 def plot_predicted_field(ds, time_index: int) -> None:
     import matplotlib.pyplot as plt
-    plt.figure(figsize=(12, 6))
-    plt.subplot(1, 2, 1)
+    plt.figure(figsize=(18, 6))
+    plt.subplot(1, 3, 1)
     plt.imshow(ds['input_temperature'].values[time_index], cmap='viridis', origin='lower')
     plt.title('Input Field')
     plt.colorbar()
-    plt.subplot(1, 2, 2)
+    plt.subplot(1, 3, 2)
     plt.imshow(ds['predicted_temperature'].values[time_index], cmap='viridis', origin='lower')
     plt.title('Predicted Field')
+    plt.colorbar()
+    plt.tight_layout()
+    plt.subplot(1, 3, 3)
+    plt.imshow(ds['predicted_residual_temperature'].values[time_index], cmap='viridis', origin='lower')
+    plt.title('Predicted Residual Field')
     plt.colorbar()
     plt.tight_layout()
     plt.savefig('results/predicted_field_comparison.png')
