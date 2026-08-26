@@ -64,6 +64,7 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
 
     full_ds = xr.open_dataset(input_netcdf).isel(depth=0)
     predicted_field = np.zeros((full_ds.time.size, full_ds.Y.size, full_ds.X.size), dtype=np.float32)
+    predicted_residual = np.zeros((full_ds.time.size, full_ds.Y.size, full_ds.X.size), dtype=np.float32)
     for t in range(full_ds.time.size):
         ds = full_ds.isel(time=t)['temperature']
         coarse_ds = ds.coarsen(X=5, Y=5, boundary='trim').mean()
@@ -80,13 +81,17 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
         coarse_target_norm = ((coarse_field * input_std) + input_mean - target_mean) / target_std
         coarse_resized = resize_field(coarse_target_norm, ds.shape)
         prediction_t = denormalize(predicted_field_t + coarse_resized, target_mean, target_std)
+        residual_t = predicted_field_t * target_std
         prediction_t = np.where(np.isfinite(ds.values), prediction_t, np.nan)
+        residual_t = np.where(np.isfinite(ds.values), residual_t, np.nan)
         predicted_field[t] = prediction_t
+        predicted_residual[t] = residual_t
 
     # Save the predicted field to a new NetCDF file
     predicted_ds = xr.Dataset(
         {
             "predicted_temperature": (("time", "Y", "X"), predicted_field),
+            "predicted_residual_temperature": (("time", "Y", "X"), predicted_residual),
             "input_temperature": (("time", "Y", "X"), full_ds['temperature'].values),
         },
         coords={
