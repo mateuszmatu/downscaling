@@ -5,6 +5,7 @@ import xarray as xr
 import numpy as np
 
 def normalize(field: np.ndarray, mean: float, std: float) -> np.ndarray:
+    field = np.where(np.isfinite(field), field, mean)
     return (field - mean) / std
 
 def denormalize(field: np.ndarray, mean: float, std: float) -> np.ndarray:
@@ -15,12 +16,10 @@ def resize_field(field: np.ndarray, target_shape: tuple[int, int]) -> np.ndarray
     resized_tensor = torch.nn.functional.interpolate(tensor, size=target_shape, mode='bilinear', align_corners=False)
     return resized_tensor.squeeze().numpy()
 
-def sample(cond: torch.Tensor, model: UNet) -> np.ndarray:
+def sample(cond: torch.Tensor, model: UNet, output_shape: tuple[int, int], out_channels: int) -> np.ndarray:
     batch_size = cond.shape[0]
-    channels = 1
-    out_h = cond.shape[2] * 5
-    out_w = cond.shape[3] * 5
-    x0 = torch.zeros((batch_size, channels, out_h, out_w), device=cond.device)
+    out_h, out_w = output_shape
+    x0 = torch.zeros((batch_size, out_channels, out_h, out_w), device=cond.device)
     t0 = torch.zeros(batch_size, dtype=torch.long, device=cond.device)
     x = model(x0, cond, t0)
     return x[0,0].detach().cpu().numpy()
@@ -68,20 +67,21 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
     for t in range(full_ds.time.size):
         ds = full_ds.isel(time=t)['temperature']
         coarse_ds = ds.coarsen(X=5, Y=5, boundary='trim').mean()
-        coarse_field = np.nan_to_num(coarse_ds.values, nan=0.0, posinf=0.0, neginf=0.0)
+        coarse_field = coarse_ds.values
         coarse_field = normalize(coarse_field, input_mean, input_std)
         cond_tensor = torch.from_numpy(coarse_field).unsqueeze(0).unsqueeze(0).float().to(device)
 
         h_coarse = full_ds['h'].coarsen(X=5, Y=5, boundary='trim').mean().values
-        h_coarse = np.nan_to_num(h_coarse, nan=0.0, posinf=0.0, neginf=0.0)
         h_coarse = normalize(h_coarse, static_mean, static_std)
         h_tensor = torch.from_numpy(h_coarse).unsqueeze(0).unsqueeze(0).float().to(device)
 
         cond_tensor = torch.cat((cond_tensor, h_tensor), dim=1)
-        predicted_field_t = sample(cond_tensor, model)
-        residual_resized = resize_field(predicted_field_t, ds.shape)
-        coarse_resized = resize_field(coarse_field, ds.shape)
-        predicted_field[t] = denormalize(residual_resized + coarse_resized, target_mean, target_std)
+        predicted_field_t = sample(cond_tensor, model, output_shape=ds.shape, out_channels=input_channels)
+        coarse_target_norm = ((coarse_field * input_std) + input_mean - target_mean) / target_std
+        coarse_resized = resize_field(coarse_target_norm, ds.shape)
+        prediction_t = denormalize(predicted_field_t + coarse_resized, target_mean, target_std)
+        prediction_t = np.where(np.isfinite(ds.values), prediction_t, np.nan)
+        predicted_field[t] = prediction_t
 
     # Save the predicted field to a new NetCDF file
     predicted_ds = xr.Dataset(
@@ -116,7 +116,7 @@ def plot_predicted_field(ds, time_index: int) -> None:
     plt.savefig('results/predicted_field_comparison.png')
 
 if __name__ == "__main__":
-    checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp2/best_model.pt")
+    checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp2/model_epoch_last.pt")
     input_netcdf = Path('/home/mateuszm/downscaling_1/test_data/norkyst160_his_zdepth_20250101T00Z_m71_AN.nc')
     output_netcdf = Path('results/predicted_temperature.nc')
     main(checkpoint_path, input_netcdf, output_netcdf)

@@ -17,15 +17,33 @@ def train_val_dataset(dataset, val_split=0.1):
     datasets['val'] = torch.utils.data.Subset(dataset, val_idx)
     return datasets
 
-def compute_loss(model: UNet, device: torch.device, batch: dict, target_channels: int) -> tuple[float]:
+def compute_loss(
+    model: UNet,
+    device: torch.device,
+    batch: dict,
+    target_channels: int,
+    input_mean: float,
+    input_std: float,
+    target_mean: float,
+    target_std: float,
+) -> tuple[float]:
     x, cond, batch_size = batch["target"].to(device), batch["input"].to(device), batch["target"].shape[0]
+    target_mask = batch.get("target_mask")
+    if target_mask is not None:
+        target_mask = target_mask.to(device)
     t0 = torch.zeros(batch_size, dtype=torch.long, device=device)
     x0 = torch.zeros_like(x)
     prediction = model(x0, cond, t0)
     coarse = cond[:, :target_channels]
     coarse = F.interpolate(coarse, size=x.shape[-2:], mode='bilinear', align_corners=False)
+    coarse = ((coarse * input_std) + input_mean - target_mean) / target_std
     residual = x - coarse
-    loss = F.mse_loss(prediction, residual)
+    if target_mask is None:
+        loss = F.mse_loss(prediction, residual)
+    else:
+        sq_err = (prediction - residual) ** 2
+        denom = target_mask.sum().clamp_min(1.0)
+        loss = (sq_err * target_mask).sum() / denom
     return loss
 
 def one_step(
@@ -35,11 +53,15 @@ def one_step(
     optimizer: torch.optim.Optimizer,
     ema_model: AveragedModel,
     target_channels: int,
+    input_mean: float,
+    input_std: float,
+    target_mean: float,
+    target_std: float,
     scaler: torch.amp.GradScaler,
 ) -> tuple[float, float]:
 
     with torch.autocast(device.type, enabled=(device.type == 'cuda')):
-        loss = compute_loss(model, device, batch, target_channels)
+        loss = compute_loss(model, device, batch, target_channels, input_mean, input_std, target_mean, target_std)
 
     optimizer.zero_grad(set_to_none=True)
     scaler.scale(loss).backward()
@@ -58,6 +80,10 @@ def validate(
     device: torch.device,
     val_loader: torch.utils.data.DataLoader,
     target_channels: int,
+    input_mean: float,
+    input_std: float,
+    target_mean: float,
+    target_std: float,
 ) -> float:
     #set model to evaluation mode
     model.eval()
@@ -66,7 +92,7 @@ def validate(
 
     for batch in val_loader:
         with torch.autocast(device.type, enabled=(device.type == 'cuda')):
-            loss  = compute_loss(model, device, batch, target_channels)
+            loss  = compute_loss(model, device, batch, target_channels, input_mean, input_std, target_mean, target_std)
         total_loss += loss.item()
         total_batches += 1
 
@@ -135,6 +161,12 @@ def main(
     sample = dataset[0]
     cond_channels = sample["input"].shape[0]
     target_channels = sample["target"].shape[0]
+    input_var_name = dataset.input_vars[0]
+    target_var_name = dataset.target_vars[0]
+    input_mean = dataset.input_stats[input_var_name]['mean']
+    input_std = dataset.input_stats[input_var_name]['std']
+    target_mean = dataset.target_stats[target_var_name]['mean']
+    target_std = dataset.target_stats[target_var_name]['std']
 
     model = UNet(in_channels=target_channels, cond_channels=cond_channels, base_channels=base_channels).to(device)
     if device.type == 'cuda':
@@ -159,7 +191,7 @@ def main(
 
         # Training step 
         for batch in train_loader:
-            loss = one_step(model, device, batch, optimizer, ema_model, target_channels, scaler)
+            loss = one_step(model, device, batch, optimizer, ema_model, target_channels, input_mean, input_std, target_mean, target_std, scaler)
             epoch_train_loss += loss.item()
             train_batches += 1
             scheduler.step()
@@ -167,7 +199,7 @@ def main(
         train_loss = epoch_train_loss / max(1, train_batches)
 
         #validate
-        val_loss = validate(ema_model.module, device, val_loader, target_channels)
+        val_loss = validate(ema_model.module, device, val_loader, target_channels, input_mean, input_std, target_mean, target_std)
 
         #log training and validation lossa
         with open(log_file, 'a') as f:
