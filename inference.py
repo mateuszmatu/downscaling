@@ -24,7 +24,7 @@ def sample(cond: torch.Tensor, model: UNet, output_shape: tuple[int, int], out_c
     x = model(x0, cond, t0)
     return x[0,0].detach().cpu().numpy()
 
-def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_channels: int = 32) -> None:
+def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_channels: int = 64) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     try:
@@ -65,10 +65,14 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
     full_ds = xr.open_dataset(input_netcdf).isel(depth=0)
     predicted_field = np.zeros((full_ds.time.size, full_ds.Y.size, full_ds.X.size), dtype=np.float32)
     predicted_residual = np.zeros((full_ds.time.size, full_ds.Y.size, full_ds.X.size), dtype=np.float32)
+    first_ds = full_ds.isel(time=0)['temperature']
+    first_coarse_ds = first_ds.coarsen(X=5, Y=5, boundary='trim').mean()
+    coarse_800m_field = np.zeros((full_ds.time.size, first_coarse_ds.sizes['Y'], first_coarse_ds.sizes['X']), dtype=np.float32)
     for t in range(full_ds.time.size):
         ds = full_ds.isel(time=t)['temperature']
         coarse_ds = ds.coarsen(X=5, Y=5, boundary='trim').mean()
         coarse_field = coarse_ds.values
+        coarse_800m_field[t] = coarse_ds.values
         coarse_field = normalize(coarse_field, input_mean, input_std)
         cond_tensor = torch.from_numpy(coarse_field).unsqueeze(0).unsqueeze(0).float().to(device)
 
@@ -93,11 +97,14 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
             "predicted_temperature": (("time", "Y", "X"), predicted_field),
             "predicted_residual_temperature": (("time", "Y", "X"), predicted_residual),
             "input_temperature": (("time", "Y", "X"), full_ds['temperature'].values),
+            "coarse_800m_temperature": (("time", "Y_800m", "X_800m"), coarse_800m_field),
         },
         coords={
             "time": full_ds.time.values,
             "Y": ds.coords["Y"].values,
             "X": ds.coords["X"].values,
+            "Y_800m": first_coarse_ds.coords["Y"].values,
+            "X_800m": first_coarse_ds.coords["X"].values,
         }
     )
     predicted_ds.to_netcdf(output_netcdf)
@@ -108,17 +115,21 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
 
 def plot_predicted_field(ds, time_index: int) -> None:
     import matplotlib.pyplot as plt
-    plt.figure(figsize=(18, 6))
-    plt.subplot(1, 3, 1)
+    plt.figure(figsize=(24, 6))
+    plt.subplot(1, 4, 1)
     plt.imshow(ds['input_temperature'].values[time_index], cmap='viridis', origin='lower')
     plt.title('Input Field')
     plt.colorbar()
-    plt.subplot(1, 3, 2)
+    plt.subplot(1, 4, 2)
+    plt.imshow(ds['coarse_800m_temperature'].values[time_index], cmap='viridis', origin='lower')
+    plt.title('Coarse 800m Field')
+    plt.colorbar()
+    plt.subplot(1, 4, 3)
     plt.imshow(ds['predicted_temperature'].values[time_index], cmap='viridis', origin='lower')
     plt.title('Predicted Field')
     plt.colorbar()
     plt.tight_layout()
-    plt.subplot(1, 3, 3)
+    plt.subplot(1, 4, 4)
     plt.imshow(ds['predicted_residual_temperature'].values[time_index], cmap='viridis', origin='lower')
     plt.title('Predicted Residual Field')
     plt.colorbar()
