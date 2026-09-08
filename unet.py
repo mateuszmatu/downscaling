@@ -50,6 +50,8 @@ class Up(nn.Module):
 
     def forward(self, x: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
         x = self.up(x)
+        # Light smoothing after transposed conv reduces checkerboard-like artifacts.
+        x = F.avg_pool2d(x, kernel_size=3, stride=1, padding=1)
         if x.shape[-2:] != skip.shape[-2:]:
             x = F.interpolate(x, size=skip.shape[-2:], mode="bilinear", align_corners=False)
         x = torch.cat([x, skip], dim=1)

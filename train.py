@@ -26,6 +26,7 @@ def compute_loss(
     input_std: float,
     target_mean: float,
     target_std: float,
+    residuals: bool,
 ) -> tuple[float]:
     x, cond, batch_size = batch["target"].to(device), batch["input"].to(device), batch["target"].shape[0]
     target_mask = batch.get("target_mask")
@@ -34,14 +35,17 @@ def compute_loss(
     t0 = torch.zeros(batch_size, dtype=torch.long, device=device)
     x0 = torch.zeros_like(x)
     prediction = model(x0, cond, t0)
-    coarse = cond[:, :target_channels]
-    coarse = F.interpolate(coarse, size=x.shape[-2:], mode='bilinear', align_corners=False)
-    coarse = ((coarse * input_std) + input_mean - target_mean) / target_std
-    residual = x - coarse
-    if target_mask is None:
-        loss = F.mse_loss(prediction, residual)
+    if residuals:
+        coarse = cond[:, :target_channels]
+        coarse = F.interpolate(coarse, size=x.shape[-2:], mode='bilinear', align_corners=False)
+        coarse = ((coarse * input_std) + input_mean - target_mean) / target_std
+        target_for_loss = x - coarse
     else:
-        sq_err = (prediction - residual) ** 2
+        target_for_loss = x
+    if target_mask is None:
+        loss = F.mse_loss(prediction, target_for_loss)
+    else:
+        sq_err = (prediction - target_for_loss) ** 2
         denom = target_mask.sum().clamp_min(1.0)
         loss = (sq_err * target_mask).sum() / denom
     return loss
@@ -57,11 +61,12 @@ def one_step(
     input_std: float,
     target_mean: float,
     target_std: float,
+    residuals: bool,
     scaler: torch.amp.GradScaler,
 ) -> tuple[float, float]:
 
     with torch.autocast(device.type, enabled=(device.type == 'cuda')):
-        loss = compute_loss(model, device, batch, target_channels, input_mean, input_std, target_mean, target_std)
+        loss = compute_loss(model, device, batch, target_channels, input_mean, input_std, target_mean, target_std, residuals)
 
     optimizer.zero_grad(set_to_none=True)
     scaler.scale(loss).backward()
@@ -84,6 +89,7 @@ def validate(
     input_std: float,
     target_mean: float,
     target_std: float,
+    residuals: bool,
 ) -> float:
     #set model to evaluation mode
     model.eval()
@@ -92,7 +98,7 @@ def validate(
 
     for batch in val_loader:
         with torch.autocast(device.type, enabled=(device.type == 'cuda')):
-            loss  = compute_loss(model, device, batch, target_channels, input_mean, input_std, target_mean, target_std)
+            loss  = compute_loss(model, device, batch, target_channels, input_mean, input_std, target_mean, target_std, residuals)
         total_loss += loss.item()
         total_batches += 1
 
@@ -131,12 +137,13 @@ def main(
     checkpoint: str | None = None,
     batch_size: int = 16,
     val_split: float = 0.1,
-    base_channels: int = 32,
+    base_channels: int = 64,
     lr: float = 1e-4,
     min_lr: float = 1e-7,
     max_epochs: int = 5,
     checkpoint_output_dir: Path = Path("checkpoints"),
-    ema_decay: float = 0.999, 
+    ema_decay: float = 0.999,
+    residuals: bool = True,
 ) -> None:
 
     _t_start = time.perf_counter()
@@ -191,15 +198,15 @@ def main(
 
         # Training step 
         for batch in train_loader:
-            loss = one_step(model, device, batch, optimizer, ema_model, target_channels, input_mean, input_std, target_mean, target_std, scaler)
+            loss = one_step(model, device, batch, optimizer, ema_model, target_channels, input_mean, input_std, target_mean, target_std, residuals, scaler)
             epoch_train_loss += loss.item()
             train_batches += 1
             scheduler.step()
 
-        train_loss = epoch_train_loss / max(1, train_batches)
+        train_loss = epoch_train_loss / max(1, train_batches) # average loss over the batch
 
         #validate
-        val_loss = validate(ema_model.module, device, val_loader, target_channels, input_mean, input_std, target_mean, target_std)
+        val_loss = validate(ema_model.module, device, val_loader, target_channels, input_mean, input_std, target_mean, target_std, residuals)
 
         #log training and validation lossa
         with open(log_file, 'a') as f:
@@ -224,6 +231,7 @@ def main(
                     'input_stats': dataset.input_stats,
                     'target_stats': dataset.target_stats,
                     'static_stats': dataset.static_stats,
+                    'residuals': residuals,
                 }, ckpt_path)
 
         ckpt_path = checkpoint_output_dir / f"model_epoch_last.pt"
@@ -241,10 +249,17 @@ def main(
                 'input_stats': dataset.input_stats,
                 'target_stats': dataset.target_stats,
                 'static_stats': dataset.static_stats,
+                'residuals': residuals,
             }, ckpt_path)
             
 
 
 if __name__ == "__main__":  
     #main(Path('/home/mateuszm/downscaling_1/zarr/test.zarr'), val_split=0.1, checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp1'), max_epochs=1000)
-    main(Path('/home/mateuszm/downscaling_1/zarr/nk160_m71_20240501-20260531.zarr'), val_split=0.1, checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp2'), max_epochs=1000)
+    main(
+        Path('/home/mateuszm/downscaling_1/zarr/nk160_m71_20240501-20260531.zarr'),
+        val_split=0.1,
+        checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp3'),
+        max_epochs=1000,
+        residuals=True,
+    )

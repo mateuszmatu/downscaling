@@ -35,6 +35,7 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
     input_stats = checkpoint['input_stats']
     target_stats = checkpoint['target_stats']
     static_stats = checkpoint.get('static_stats', {})
+    residuals = checkpoint.get('residuals', True)
     # Strip _orig_mod. prefix added by torch.compile if present
     model_state = {k.replace('_orig_mod.', ''): v for k, v in model_state.items()}
     for key, value in model_state.items():
@@ -71,9 +72,9 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
     for t in range(full_ds.time.size):
         ds = full_ds.isel(time=t)['temperature']
         coarse_ds = ds.coarsen(X=5, Y=5, boundary='trim').mean()
-        coarse_field = coarse_ds.values
+        coarse_field_raw = coarse_ds.values
         coarse_800m_field[t] = coarse_ds.values
-        coarse_field = normalize(coarse_field, input_mean, input_std)
+        coarse_field = normalize(coarse_field_raw, input_mean, input_std)
         cond_tensor = torch.from_numpy(coarse_field).unsqueeze(0).unsqueeze(0).float().to(device)
 
         h_coarse = full_ds['h'].coarsen(X=5, Y=5, boundary='trim').mean().values
@@ -81,11 +82,17 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
         h_tensor = torch.from_numpy(h_coarse).unsqueeze(0).unsqueeze(0).float().to(device)
 
         cond_tensor = torch.cat((cond_tensor, h_tensor), dim=1)
-        predicted_field_t = sample(cond_tensor, model, output_shape=ds.shape, out_channels=input_channels)
+        model_output_norm = sample(cond_tensor, model, output_shape=ds.shape, out_channels=input_channels)
         coarse_target_norm = ((coarse_field * input_std) + input_mean - target_mean) / target_std
-        coarse_resized = resize_field(coarse_target_norm, ds.shape)
-        prediction_t = denormalize(predicted_field_t + coarse_resized, target_mean, target_std)
-        residual_t = predicted_field_t * target_std
+        coarse_resized_norm = resize_field(coarse_target_norm, ds.shape)
+        coarse_resized = resize_field(coarse_field_raw, ds.shape)
+
+        if residuals:
+            prediction_t = denormalize(model_output_norm + coarse_resized_norm, target_mean, target_std)
+            residual_t = model_output_norm * target_std
+        else:
+            prediction_t = denormalize(model_output_norm, target_mean, target_std)
+            residual_t = prediction_t - coarse_resized
         prediction_t = np.where(np.isfinite(ds.values), prediction_t, np.nan)
         residual_t = np.where(np.isfinite(ds.values), residual_t, np.nan)
         predicted_field[t] = prediction_t
@@ -115,29 +122,38 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
 
 def plot_predicted_field(ds, time_index: int) -> None:
     import matplotlib.pyplot as plt
-    plt.figure(figsize=(24, 6))
-    plt.subplot(1, 4, 1)
-    plt.imshow(ds['input_temperature'].values[time_index], cmap='viridis', origin='lower')
+    plt.figure(figsize=(30, 6))
+
+    plot1_data = ds['input_temperature'].values[time_index]
+    plot1_vmin = np.nanmin(plot1_data)
+    plot1_vmax = np.nanmax(plot1_data)
+    plt.subplot(1, 5, 1)
+    plt.imshow(plot1_data, cmap='viridis', origin='lower', vmin=plot1_vmin, vmax=plot1_vmax)
     plt.title('Input Field')
     plt.colorbar()
-    plt.subplot(1, 4, 2)
+    plt.subplot(1, 5, 2)
     plt.imshow(ds['coarse_800m_temperature'].values[time_index], cmap='viridis', origin='lower')
     plt.title('Coarse 800m Field')
     plt.colorbar()
-    plt.subplot(1, 4, 3)
-    plt.imshow(ds['predicted_temperature'].values[time_index], cmap='viridis', origin='lower')
+    plt.subplot(1, 5, 3)
+    plt.imshow(ds['predicted_temperature'].values[time_index], cmap='viridis', origin='lower', vmin=plot1_vmin, vmax=plot1_vmax)
     plt.title('Predicted Field')
     plt.colorbar()
     plt.tight_layout()
-    plt.subplot(1, 4, 4)
+    plt.subplot(1, 5, 4)
     plt.imshow(ds['predicted_residual_temperature'].values[time_index], cmap='viridis', origin='lower')
     plt.title('Predicted Residual Field')
+    plt.colorbar()
+    plt.subplot(1, 5, 5)
+    plt.imshow(ds['predicted_temperature'].values[time_index] - ds['input_temperature'].values[time_index], cmap='bwr', vmin=-1, vmax=1, origin='lower')
+    plt.title('Predicted - truth')
     plt.colorbar()
     plt.tight_layout()
     plt.savefig('results/predicted_field_comparison.png')
 
 if __name__ == "__main__":
-    checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp2/model_epoch_last.pt")
+    #checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp3/model_epoch_last.pt")
+    checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp3/best_model.pt")
     input_netcdf = Path('/home/mateuszm/downscaling_1/test_data/norkyst160_his_zdepth_20250101T00Z_m71_AN.nc')
     output_netcdf = Path('results/predicted_temperature.nc')
     main(checkpoint_path, input_netcdf, output_netcdf)
