@@ -8,10 +8,17 @@ from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 import torch.nn.functional as F
 import numpy as np
 
-def train_val_dataset(dataset, val_split=0.1):
+def train_val_dataset(
+        dataset,
+        val_split: float = 0.1,
+):
+    indices = np.arange(len(dataset))
+    #randomize the split
+    rng = np.random.default_rng(42)
+    rng.shuffle(indices)
     split_idx = int(len(dataset) * (1 - val_split))
-    train_idx = list(range(0, split_idx))
-    val_idx = list(range(split_idx, len(dataset)))
+    train_idx = indices[:split_idx].tolist()
+    val_idx = indices[split_idx:].tolist()
     datasets = {}
     datasets['train'] = torch.utils.data.Subset(dataset, train_idx)
     datasets['val'] = torch.utils.data.Subset(dataset, val_idx)
@@ -143,8 +150,7 @@ def main(
     max_epochs: int = 5,
     checkpoint_output_dir: Path = Path("checkpoints"),
     ema_decay: float = 0.999,
-    residuals: bool = True,
-) -> None:
+    residuals: bool = True,) -> None:
 
     _t_start = time.perf_counter()
     log_file = make_log_file()
@@ -259,7 +265,7 @@ if __name__ == "__main__":
     main(
         Path('/home/mateuszm/downscaling_1/zarr/nk160_m71_20240501-20260531.zarr'),
         val_split=0.1,
-        checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp3'),
+        checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp4'),
         max_epochs=1000,
-        residuals=True,
+        residuals=False,
     )
