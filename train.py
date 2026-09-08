@@ -124,16 +124,16 @@ def make_log_file(dir: Path = Path('logs'), filename: str = "training_log.txt") 
 
 def lr_scheduler(
     optimizer: torch.optim.Optimizer,
-    warmup_epochs: int,
-    max_epochs: int,
+    warmup_steps: int,
+    total_steps: int,
     eta_min_ratio: float = 0.0,
 ):
 
-    def lr_lambda(epoch):
-        if epoch < warmup_epochs:
-            return float(epoch + 1) / float(max(1, warmup_epochs))
+    def lr_lambda(step):
+        if step < warmup_steps:
+            return float(step + 1) / float(max(1, warmup_steps))
         else:
-            progress = float(epoch - warmup_epochs) / float(max(1, max_epochs - warmup_epochs))
+            progress = float(step - warmup_steps) / float(max(1, total_steps - warmup_steps))
             cosine_decay = 0.5 * (1.0 + np.cos(np.pi * progress))
             return eta_min_ratio + (1.0 - eta_min_ratio) * cosine_decay
 
@@ -145,11 +145,12 @@ def main(
     batch_size: int = 16,
     val_split: float = 0.1,
     base_channels: int = 64,
-    lr: float = 1e-4,
+    lr: float = 1e-3,
     min_lr: float = 1e-7,
     max_epochs: int = 5,
+    warmup_epochs: int = 1,
     checkpoint_output_dir: Path = Path("checkpoints"),
-    ema_decay: float = 0.999,
+    ema_decay: float = 0.99,
     residuals: bool = True,) -> None:
 
     _t_start = time.perf_counter()
@@ -190,10 +191,16 @@ def main(
     #Learning rate
     steps_per_epoch = len(train_loader)
     total_steps = steps_per_epoch * max_epochs
+    warmup_steps = warmup_epochs * steps_per_epoch
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     scaler = torch.amp.GradScaler(device.type, enabled=(device.type == 'cuda'))
 
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=min_lr)
+    scheduler = lr_scheduler(
+        optimizer,
+        warmup_steps=warmup_steps,
+        total_steps=total_steps,
+        eta_min_ratio=(min_lr / lr),
+    )
     start_epoch = 0
     best_val_loss = float("inf")
 
@@ -266,6 +273,6 @@ if __name__ == "__main__":
         Path('/home/mateuszm/downscaling_1/zarr/nk160_m71_20240501-20260531.zarr'),
         val_split=0.1,
         checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp4'),
-        max_epochs=1000,
+        max_epochs=50,
         residuals=False,
     )
