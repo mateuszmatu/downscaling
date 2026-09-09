@@ -7,7 +7,7 @@ class TimeEmb(nn.Module):
         super(TimeEmb, self).__init__()
         self.dim = dim
         self.linear1 = nn.Linear(dim, dim * 16)
-        self.act = nn.ReLU()
+        self.act = nn.SiLU()
         self.linear2 = nn.Linear(dim * 16, dim * 16)
 
     def forward(self, t: torch.Tensor) -> torch.Tensor:
@@ -33,10 +33,10 @@ class DoubleConv(nn.Module):
         self.double_conv = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
             nn.GroupNorm(num_groups=8, num_channels=out_channels),
-            nn.ReLU(inplace=True),
+            nn.SiLU(),
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
             nn.GroupNorm(num_groups=8, num_channels=out_channels),
-            nn.ReLU(inplace=True)
+            nn.SiLU()
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
