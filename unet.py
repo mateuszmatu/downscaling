@@ -51,9 +51,7 @@ class Up(nn.Module):
     def forward(self, x: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
         x = self.up(x)
         # Light smoothing after transposed conv reduces checkerboard-like artifacts.
-        x = F.avg_pool2d(x, kernel_size=3, stride=1, padding=1)
-        if x.shape[-2:] != skip.shape[-2:]:
-            x = F.interpolate(x, size=skip.shape[-2:], mode="bilinear", align_corners=False)
+        x = F.interpolate(x, size=skip.shape[-2:], mode="bilinear", align_corners=False)
         x = torch.cat([x, skip], dim=1)
         return self.conv(x)
 
@@ -84,6 +82,7 @@ class UNet(nn.Module):
         self.down2 = Down(base_channels * 2, base_channels * 4)
         self.down3 = Down(base_channels * 4, base_channels * 8)
         self.down4 = Down(base_channels * 8, base_channels * 16)
+        self.bottleneck = DoubleConv(base_channels * 16, base_channels * 16)
         self.up4 = Up(base_channels * 16, base_channels * 8)
         self.up3 = Up(base_channels * 8, base_channels * 4)
         self.up2 = Up(base_channels * 4, base_channels * 2)
@@ -105,7 +104,8 @@ class UNet(nn.Module):
         x5 = self.down4(x4)
         x5 = x5 + t_emb[:, :, None, None]
 
-        x = self.up4(x5, x4)
+        x = self.bottleneck(x5)
+        x = self.up4(x, x4)
         x = self.up3(x, x3)
         x = self.up2(x, x2)
         x = self.up1(x, x1)

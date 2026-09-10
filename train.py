@@ -57,6 +57,13 @@ def compute_loss(
         loss = (sq_err * target_mask).sum() / denom
     return loss
 
+
+def loss_reduction_weight(batch: dict) -> float:
+    target_mask = batch.get("target_mask")
+    if target_mask is not None:
+        return float(target_mask.sum().item())
+    return float(batch["target"].numel())
+
 def one_step(
     model: UNet,
     device: torch.device,
@@ -101,16 +108,17 @@ def validate(
     #set model to evaluation mode
     model.eval()
     total_loss = 0.0
-    total_batches = 0
+    total_weight = 0.0
 
     for batch in val_loader:
         with torch.autocast(device.type, enabled=(device.type == 'cuda')):
             loss  = compute_loss(model, device, batch, target_channels, input_mean, input_std, target_mean, target_std, residuals)
-        total_loss += loss.item()
-        total_batches += 1
+        weight = loss_reduction_weight(batch)
+        total_loss += loss.item() * weight
+        total_weight += weight
 
     model.train()
-    return total_loss / max(1, total_batches)
+    return total_loss / max(1.0, total_weight)
 
 def make_log_file(dir: Path = Path('logs'), filename: str = "training_log.txt") -> None:
     log_file = dir / filename
@@ -145,10 +153,10 @@ def main(
     batch_size: int = 16,
     val_split: float = 0.1,
     base_channels: int = 64,
-    lr: float = 1e-3,
-    min_lr: float = 1e-7,
-    max_epochs: int = 5,
-    warmup_epochs: int = 1,
+    lr: float = 1e-4,
+    min_lr: float = 1e-6,
+    max_epochs: int = 50,
+    warmup_epochs: int = 5,
     checkpoint_output_dir: Path = Path("checkpoints"),
     ema_decay: float = 0.99,
     residuals: bool = True,) -> None:
@@ -207,16 +215,19 @@ def main(
     for epoch in range(start_epoch, max_epochs):
         model.train() # set model to training mode
         epoch_train_loss = 0.0
-        train_batches = 0
+        epoch_train_weight = 0.0
 
         # Training step 
-        for batch in train_loader:
+        for batch_idx, batch in enumerate(train_loader):
+            if batch_idx == 0:
+                print(f"Epoch {epoch+1}: first-batch LR = {optimizer.param_groups[0]['lr']:.10f}")
             loss = one_step(model, device, batch, optimizer, ema_model, target_channels, input_mean, input_std, target_mean, target_std, residuals, scaler)
-            epoch_train_loss += loss.item()
-            train_batches += 1
+            weight = loss_reduction_weight(batch)
+            epoch_train_loss += loss.item() * weight
+            epoch_train_weight += weight
             scheduler.step()
 
-        train_loss = epoch_train_loss / max(1, train_batches) # average loss over the batch
+        train_loss = epoch_train_loss / max(1.0, epoch_train_weight)
 
         #validate
         val_loss = validate(ema_model.module, device, val_loader, target_channels, input_mean, input_std, target_mean, target_std, residuals)
@@ -268,11 +279,12 @@ def main(
 
 
 if __name__ == "__main__":  
-    #main(Path('/home/mateuszm/downscaling_1/zarr/test.zarr'), val_split=0.1, checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp1'), max_epochs=1000)
+    data = Path('/home/mateuszm/downscaling_1/zarr/test.zarr')
+    data = Path('/home/mateuszm/downscaling_1/zarr/nk160_m71_20240501-20260531.zarr')
     main(
-        Path('/home/mateuszm/downscaling_1/zarr/nk160_m71_20240501-20260531.zarr'),
-        val_split=0.1,
-        checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp4'),
-        max_epochs=50,
-        residuals=False,
+        data,
+        val_split=0.2,
+        checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp5'),
+        max_epochs=200,
+        residuals=True,
     )
