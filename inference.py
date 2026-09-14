@@ -22,7 +22,7 @@ def sample(cond: torch.Tensor, model: UNet, output_shape: tuple[int, int], out_c
     x0 = torch.zeros((batch_size, out_channels, out_h, out_w), device=cond.device)
     t0 = torch.zeros(batch_size, dtype=torch.long, device=cond.device)
     x = model(x0, cond, t0)
-    return x[0,0].detach().cpu().numpy()
+    return x[0].detach().cpu().numpy()  # Returns (out_channels, out_h, out_w)
 
 def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_channels: int = 64) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -52,74 +52,87 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
     model.load_state_dict(model_state)
     model.eval()
 
-    input_var_name = next(iter(input_stats))
-    target_var_name = next(iter(target_stats))
-    static_var_name = next(iter(static_stats)) if static_stats else "h"
+    import re
+    input_var_names = [re.sub('_0', '', var) for var in input_stats.keys()]
+    target_var_names = [re.sub('_0', '', var) for var in target_stats.keys()]
+    static_var_names = list(static_stats.keys()) if static_stats else []
 
-    input_mean = input_stats[input_var_name]["mean"]
-    input_std = input_stats[input_var_name]["std"]
-    target_mean = target_stats[target_var_name]["mean"]
-    target_std = target_stats[target_var_name]["std"]
-    static_mean = static_stats.get(static_var_name, {}).get("mean", 0.0)
-    static_std = static_stats.get(static_var_name, {}).get("std", 1.0)
+    #still only surface
+    ids = xr.open_dataset(input_netcdf).isel(depth=0)
 
-    full_ds = xr.open_dataset(input_netcdf).isel(depth=0)
-    predicted_field = np.zeros((full_ds.time.size, full_ds.Y.size, full_ds.X.size), dtype=np.float32)
-    predicted_residual = np.zeros((full_ds.time.size, full_ds.Y.size, full_ds.X.size), dtype=np.float32)
-    first_ds = full_ds.isel(time=0)['temperature']
-    first_coarse_ds = first_ds.coarsen(X=5, Y=5, boundary='trim').mean()
-    coarse_800m_field = np.zeros((full_ds.time.size, first_coarse_ds.sizes['Y'], first_coarse_ds.sizes['X']), dtype=np.float32)
-    for t in range(full_ds.time.size):
-        ds = full_ds.isel(time=t)['temperature']
-        coarse_ds = ds.coarsen(X=5, Y=5, boundary='trim').mean()
-        coarse_field_raw = coarse_ds.values
-        coarse_800m_field[t] = coarse_ds.values
-        coarse_field = normalize(coarse_field_raw, input_mean, input_std)
-        cond_tensor = torch.from_numpy(coarse_field).unsqueeze(0).unsqueeze(0).float().to(device)
+    ref_shape = ids.isel(time=0)[target_var_names[0]].shape
 
-        h_coarse = full_ds['h'].coarsen(X=5, Y=5, boundary='trim').mean().values
-        h_coarse = normalize(h_coarse, static_mean, static_std)
-        h_tensor = torch.from_numpy(h_coarse).unsqueeze(0).unsqueeze(0).float().to(device)
+    pfields = {var: np.zeros((ids.time.size, ids.Y.size, ids.X.size), dtype=np.float32) for var in target_var_names}
+    presiduals = {var: np.zeros((ids.time.size, ids.Y.size, ids.X.size), dtype=np.float32) for var in target_var_names}
 
-        cond_tensor = torch.cat((cond_tensor, h_tensor), dim=1)
-        model_output_norm = sample(cond_tensor, model, output_shape=ds.shape, out_channels=input_channels)
-        coarse_target_norm = ((coarse_field * input_std) + input_mean - target_mean) / target_std
-        coarse_resized_norm = resize_field(coarse_target_norm, ds.shape)
-        coarse_resized = resize_field(coarse_field_raw, ds.shape)
+    for t in range(ids.time.size):
+        cond_parts = [] # what does this do?
+        for var in input_var_names:
+            tds = ids.isel(time=t)[var].coarsen(X=5, Y=5, boundary='trim').mean()
+            imean = input_stats[var+'_0']["mean"] # temporary fix for the fact that input_stats keys have _0 suffix
+            istd = input_stats[var+'_0']["std"]
+            cfield = normalize(tds.values, imean, istd)
+            cond_parts.append(torch.from_numpy(cfield).unsqueeze(0).float())
 
-        if residuals:
-            prediction_t = denormalize(model_output_norm + coarse_resized_norm, target_mean, target_std)
-            residual_t = model_output_norm * target_std
-        else:
-            prediction_t = denormalize(model_output_norm, target_mean, target_std)
-            residual_t = prediction_t - coarse_resized
-        prediction_t = np.where(np.isfinite(ds.values), prediction_t, np.nan)
-        residual_t = np.where(np.isfinite(ds.values), residual_t, np.nan)
-        predicted_field[t] = prediction_t
-        predicted_residual[t] = residual_t
+        for var in static_var_names:
+            smean = static_stats[var]["mean"]
+            sstd = static_stats[var]["std"]
+            hds = ids[var].coarsen(X=5, Y=5, boundary='trim').mean().values
+            hfield = normalize(hds, smean, sstd)
+            cond_parts.append(torch.from_numpy(hfield).unsqueeze(0).float())
 
-    # Save the predicted field to a new NetCDF file
-    predicted_ds = xr.Dataset(
-        {
-            "predicted_temperature": (("time", "Y", "X"), predicted_field),
-            "predicted_residual_temperature": (("time", "Y", "X"), predicted_residual),
-            "input_temperature": (("time", "Y", "X"), full_ds['temperature'].values),
-            "coarse_800m_temperature": (("time", "Y_800m", "X_800m"), coarse_800m_field),
-        },
-        coords={
-            "time": full_ds.time.values,
-            "Y": ds.coords["Y"].values,
-            "X": ds.coords["X"].values,
-            "Y_800m": first_coarse_ds.coords["Y"].values,
-            "X_800m": first_coarse_ds.coords["X"].values,
-        }
-    )
-    predicted_ds.to_netcdf(output_netcdf)
+        cond_tensor = torch.cat(cond_parts, dim=0).unsqueeze(0).to(device)
 
+        shape = sample(cond_tensor, model, output_shape=ref_shape, out_channels=input_channels)
 
+        for ch, var in enumerate(target_var_names):
+            tds = ids.isel(time=t)[var]
+            tds_coarse = tds.coarsen(X=5, Y=5, boundary='trim').mean()
 
-    print('passed')
+            imean = input_stats[var+'_0']["mean"]
+            istd = input_stats[var+'_0']["std"]
+            tmean = target_stats[var+'_0']["mean"]
+            tstd = target_stats[var+'_0']["std"]
 
+            cfield = normalize(tds_coarse.values, imean, istd)
+            cfield_norm = ((cfield * istd) + imean - tmean) / tstd
+            cfield_resized_norm = resize_field(cfield_norm, tds.shape)
+            cfield_resized = resize_field(tds.values, tds.shape)
+
+            model_ch = shape[ch]
+
+            #check this if test
+            if residuals:
+                predicted_var = denormalize(model_ch + cfield_resized_norm, tmean, tstd)
+                residual_var = model_ch * tstd
+            else:
+                predicted_var = denormalize(model_ch, tmean, tstd)
+                residual_var = predicted_var - cfield_resized
+
+            predicted_var = np.where(np.isfinite(tds.values), predicted_var, np.nan)
+            residual_var = np.where(np.isfinite(tds.values), residual_var, np.nan)
+            pfields[var][t] = predicted_var
+            presiduals[var][t] = residual_var
+
+        # Save the fields to NetCDF
+        data_vars = {}
+        for var in target_var_names:
+            data_vars[f"predicted_{var}"] = (("time", "Y", "X"), pfields[var])
+            data_vars[f"predicted_residual_{var}"] = (("time", "Y", "X"), presiduals[var])
+
+        for var in input_var_names:
+            data_vars[f"input_{var}"] = (("time", "Y", "X"), ids[var].values)
+
+        output_ds = xr.Dataset(
+            data_vars,
+            coords={
+                "time": ids.time.values,
+                "Y": ids.Y.values,
+                "X": ids.X.values,
+            })
+
+        output_ds.to_netcdf(output_netcdf)
+                
 def plot_predicted_field(ds, time_index: int) -> None:
     import matplotlib.pyplot as plt
     plt.figure(figsize=(30, 6))
@@ -151,10 +164,12 @@ def plot_predicted_field(ds, time_index: int) -> None:
     plt.tight_layout()
     plt.savefig('results/predicted_field_comparison.png')
 
+
 if __name__ == "__main__":
-    #checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp3/model_epoch_last.pt")
-    checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp3/best_model.pt")
-    input_netcdf = Path('/home/mateuszm/downscaling_1/test_data/norkyst160_his_zdepth_20250101T00Z_m71_AN.nc')
-    output_netcdf = Path('results/predicted_temperature.nc')
+    checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp7/model_epoch_last.pt")
+    #checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp7/best_model.pt")
+    input_netcdf = Path('/home/mateuszm/downscaling/test_data/norkyst160_his_zdepth_20260913T00Z_m71_AN.nc')
+    output_netcdf = Path('results/field.nc')
     main(checkpoint_path, input_netcdf, output_netcdf)
-    plot_predicted_field(xr.open_dataset('results/predicted_temperature.nc'), time_index=0)
+    #ds_result = xr.open_dataset('results/predicted_temperature.nc')
+    #plot_predicted_field(ds_result, time_index=-1)

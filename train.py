@@ -8,6 +8,16 @@ from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 import torch.nn.functional as F
 import numpy as np
 
+
+def stats(
+    stats: dict[str, dict[str, float]],
+    var_names: list[str],
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    means = torch.tensor([stats[var_name]['mean'] for var_name in var_names], device=device, dtype=torch.float32)
+    stds = torch.tensor([stats[var_name]['std'] for var_name in var_names], device=device, dtype=torch.float32)
+    return means[:, None, None], stds[:, None, None]
+
 def train_val_dataset(
         dataset,
         val_split: float = 0.1,
@@ -29,10 +39,10 @@ def compute_loss(
     device: torch.device,
     batch: dict,
     target_channels: int,
-    input_mean: float,
-    input_std: float,
-    target_mean: float,
-    target_std: float,
+    input_mean: torch.Tensor,
+    input_std: torch.Tensor,
+    target_mean: torch.Tensor,
+    target_std: torch.Tensor,
     residuals: bool,
 ) -> tuple[float]:
     x, cond, batch_size = batch["target"].to(device), batch["input"].to(device), batch["target"].shape[0]
@@ -71,10 +81,10 @@ def one_step(
     optimizer: torch.optim.Optimizer,
     ema_model: AveragedModel,
     target_channels: int,
-    input_mean: float,
-    input_std: float,
-    target_mean: float,
-    target_std: float,
+    input_mean: torch.Tensor,
+    input_std: torch.Tensor,
+    target_mean: torch.Tensor,
+    target_std: torch.Tensor,
     residuals: bool,
     scaler: torch.amp.GradScaler,
 ) -> tuple[float, float]:
@@ -85,7 +95,7 @@ def one_step(
     optimizer.zero_grad(set_to_none=True)
     scaler.scale(loss).backward()
     scaler.unscale_(optimizer)
-    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1)
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
     scaler.step(optimizer)
     scaler.update()
 
@@ -99,10 +109,10 @@ def validate(
     device: torch.device,
     val_loader: torch.utils.data.DataLoader,
     target_channels: int,
-    input_mean: float,
-    input_std: float,
-    target_mean: float,
-    target_std: float,
+    input_mean: torch.Tensor,
+    input_std: torch.Tensor,
+    target_mean: torch.Tensor,
+    target_std: torch.Tensor,
     residuals: bool,
 ) -> float:
     #set model to evaluation mode
@@ -142,6 +152,7 @@ def lr_scheduler(
             return float(step + 1) / float(max(1, warmup_steps))
         else:
             progress = float(step - warmup_steps) / float(max(1, total_steps - warmup_steps))
+            progress = min(max(progress, 0.0), 1.0)
             cosine_decay = 0.5 * (1.0 + np.cos(np.pi * progress))
             return eta_min_ratio + (1.0 - eta_min_ratio) * cosine_decay
 
@@ -161,7 +172,6 @@ def main(
     ema_decay: float = 0.99,
     residuals: bool = True,) -> None:
 
-    _t_start = time.perf_counter()
     log_file = make_log_file()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if device.type == 'cuda':
@@ -170,25 +180,26 @@ def main(
     if checkpoint is not None:
         ckpt = torch.load(checkpoint, map_location=device)
 
+    # Loading data
+
     dataset = dataloader.ROMSDownscalingDataset(data_dir=data_dir)
+
     datasets = train_val_dataset(dataset, val_split=val_split)
     train_dataset = datasets['train']
     val_dataset = datasets['val']
+
     train_time_indices = [dataset.valid_time_idx[i] for i in train_dataset.indices]
     dataset.input_stats = dataset._compute_stats(dataset.input_vars, coarsen=True, time_indices=train_time_indices)
     dataset.target_stats = dataset._compute_stats(dataset.target_vars, coarsen=False, time_indices=train_time_indices)
+
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=torch.cuda.is_available())
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, num_workers=0, pin_memory=torch.cuda.is_available())
-    print(f'DATA LOADED ({time.perf_counter() - _t_start:.1f}s)')
+
     sample = dataset[0]
     cond_channels = sample["input"].shape[0]
     target_channels = sample["target"].shape[0]
-    input_var_name = dataset.input_vars[0]
-    target_var_name = dataset.target_vars[0]
-    input_mean = dataset.input_stats[input_var_name]['mean']
-    input_std = dataset.input_stats[input_var_name]['std']
-    target_mean = dataset.target_stats[target_var_name]['mean']
-    target_std = dataset.target_stats[target_var_name]['std']
+    input_mean, input_std = stats(dataset.input_stats, dataset.input_vars, device)
+    target_mean, target_std = stats(dataset.target_stats, dataset.target_vars, device)
 
     model = UNet(in_channels=target_channels, cond_channels=cond_channels, base_channels=base_channels).to(device)
     if device.type == 'cuda':
@@ -196,10 +207,9 @@ def main(
 
     ema_model = AveragedModel(model, multi_avg_fn=get_ema_multi_avg_fn(decay=ema_decay)).to(device)
 
-    #Learning rate
-    steps_per_epoch = len(train_loader)
-    total_steps = steps_per_epoch * max_epochs
-    warmup_steps = warmup_epochs * steps_per_epoch
+    # Learning rate is stepped once per epoch, so the scheduler is defined in epochs.
+    total_steps = max_epochs
+    warmup_steps = warmup_epochs
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     scaler = torch.amp.GradScaler(device.type, enabled=(device.type == 'cuda'))
 
@@ -225,7 +235,7 @@ def main(
             weight = loss_reduction_weight(batch)
             epoch_train_loss += loss.item() * weight
             epoch_train_weight += weight
-            scheduler.step()
+        scheduler.step()
 
         train_loss = epoch_train_loss / max(1.0, epoch_train_weight)
 
@@ -251,6 +261,7 @@ def main(
                     'model_state_dict': raw_model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'scheduler_state_dict': scheduler.state_dict(),
+                    'scaler_state_dict': scaler.state_dict(),
                     'ema_model_state_dict': raw_ema.state_dict(),
                     'input_stats': dataset.input_stats,
                     'target_stats': dataset.target_stats,
@@ -269,6 +280,7 @@ def main(
                 'model_state_dict': raw_model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'scheduler_state_dict': scheduler.state_dict(),
+                'scaler_state_dict': scaler.state_dict(),
                 'ema_model_state_dict': raw_ema.state_dict(),
                 'input_stats': dataset.input_stats,
                 'target_stats': dataset.target_stats,
@@ -280,11 +292,11 @@ def main(
 
 if __name__ == "__main__":  
     data = Path('/home/mateuszm/downscaling_1/zarr/test.zarr')
-    data = Path('/home/mateuszm/downscaling_1/zarr/nk160_m71_20240501-20260531.zarr')
+    #data = Path('/home/mateuszm/downscaling_1/zarr/nk160_m71_20240501-20260531.zarr')
     main(
         data,
         val_split=0.2,
-        checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp5'),
+        checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp7'),
         max_epochs=200,
         residuals=True,
     )
