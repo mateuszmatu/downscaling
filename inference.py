@@ -155,7 +155,9 @@ if __name__ == "__main__":
                     Path('/home/mateuszm/downscaling/test_data/norkyst160_his_zdepth_20260913T00Z_m71_AN.nc'),
                     Path('/home/mateuszm/downscaling/test_data/norkyst160_his_zdepth_20260914T00Z_m71_AN.nc')]
     output_netcdf = Path('results/field.nc')
-    main(checkpoint_path, input_netcdf, output_netcdf)
+    #main(checkpoint_path, input_netcdf, output_netcdf)
     #ds_result = xr.open_dataset('results/predicted_temperature.nc')
     pf.plot_fields(output_netcdf, time_index=-1)
     pf.area_mean_timeseries(output_netcdf)
+    pf.histogram(output_netcdf, vars=['abs_vel', 'u_eastward', 'v_northward'], bins=50, save_path='results/value_histogram.png')
+    pf.scatter(output_netcdf, vars=['abs_vel', 'u_eastward', 'v_northward'], save_path='results/value_scatter.png')

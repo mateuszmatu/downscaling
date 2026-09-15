@@ -64,6 +64,51 @@ def animate_variable(ds, var='abs_vel', save_path='results/animated_field.gif', 
     plt.close(fig)
 
 
+def histogram(ds, vars=['abs_vel', 'u_eastward', 'v_northward'], bins=50, save_path='results/value_histogram.png') -> None:
+    ds = xr.open_dataset(ds)
+
+    if isinstance(vars, str):
+        vars = [vars]
+
+    fig, axes = plt.subplots(
+        nrows=len(vars),
+        ncols=1,
+        figsize=(10, 4 * len(vars)),
+        constrained_layout=True,
+    )
+
+    if len(vars) == 1:
+        axes = np.array([axes])
+
+    for i, var in enumerate(vars):
+        if var == 'abs_vel':
+            pred = np.sqrt(ds['predicted_u_eastward'].values**2 + ds['predicted_v_northward'].values**2)
+            truth = np.sqrt(ds['input_u_eastward'].values**2 + ds['input_v_northward'].values**2)
+        else:
+            pred = ds[f'predicted_{var}'].values
+            truth = ds[f'input_{var}'].values
+
+        truth_vals = np.asarray(truth).ravel()
+        pred_vals = np.asarray(pred).ravel()
+
+        truth_vals = truth_vals[np.isfinite(truth_vals)]
+        pred_vals = pred_vals[np.isfinite(pred_vals)]
+
+        ax = axes[i]
+        ax.hist(truth_vals, bins=bins, alpha=0.6, label='Truth')
+        ax.hist(pred_vals, bins=bins, alpha=0.6, label='Downscaled')
+        ax.set_xlim(-1, 1)
+
+        ax.set_title(f'Value distribution for {var}')
+        ax.set_xlabel('Value')
+        ax.set_ylabel('Number')
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc='best')
+
+    fig.savefig(save_path, dpi=150)
+    plt.close(fig)
+
+
 def plot_fields(ds, time_index: int, vars=['abs_vel', 'u_eastward', 'v_northward']) -> None:
     import matplotlib.pyplot as plt
     fig, axes = plt.subplots(
@@ -150,6 +195,52 @@ def area_mean_timeseries(ds, vars=['abs_vel', 'u_eastward', 'v_northward']) -> N
 
     fig.savefig('results/area_mean_timeseries.png', dpi=150)
     plt.close(fig)
+
+
+def scatter(ds, vars=['abs_vel', 'u_eastward', 'v_northward'], save_path='results/value_scatter.png') -> None:
+    ds = xr.open_dataset(ds)
+
+    if isinstance(vars, str):
+        vars = [vars]
+
+    fig, axes = plt.subplots(
+        nrows=len(vars),
+        ncols=1,
+        figsize=(8, 4 * len(vars)),
+        constrained_layout=True,
+    )
+
+    if len(vars) == 1:
+        axes = np.array([axes])
+
+    for i, var in enumerate(vars):
+        if var == 'abs_vel':
+            pred = np.sqrt(ds['predicted_u_eastward'].values**2 + ds['predicted_v_northward'].values**2)
+            truth = np.sqrt(ds['input_u_eastward'].values**2 + ds['input_v_northward'].values**2)
+        else:
+            pred = ds[f'predicted_{var}'].values
+            truth = ds[f'input_{var}'].values
+
+        pred_vals = np.asarray(pred).ravel()
+        truth_vals = np.asarray(truth).ravel()
+
+        finite = np.isfinite(pred_vals) & np.isfinite(truth_vals)
+        pred_vals = pred_vals[finite]
+        truth_vals = truth_vals[finite]
+
+        ax = axes[i]
+        ax.scatter(truth_vals, pred_vals, s=4, alpha=0.5)
+        ax.plot([-1, 1], [-1, 1], color='black', linestyle='--', linewidth=1)
+        ax.set_xlim(-1, 1)
+        ax.set_ylim(-1, 1)
+        ax.set_title(f'Truth vs Downscaled {var}')
+        ax.set_xlabel('Truth')
+        ax.set_ylabel('Downscaled')
+        ax.grid(True, alpha=0.3)
+
+    fig.savefig(save_path, dpi=150)
+    plt.close(fig)
+
 
 if __name__ == "__main__":
     animate_variable('results/field.nc', var='abs_vel', save_path='results/animated_field.gif', fps=5)
