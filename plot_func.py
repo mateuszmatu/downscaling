@@ -2,6 +2,68 @@ import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
 
+
+def animate_variable(ds, var='abs_vel', save_path='results/animated_field.gif', fps=5) -> None:
+    from matplotlib.animation import FuncAnimation
+
+    ds = xr.open_dataset(ds)
+
+    if var == 'abs_vel':
+        coarse = np.sqrt(ds['coarse_u_eastward'].values**2 + ds['coarse_v_northward'].values**2)
+        pred = np.sqrt(ds['predicted_u_eastward'].values**2 + ds['predicted_v_northward'].values**2)
+        truth = np.sqrt(ds['input_u_eastward'].values**2 + ds['input_v_northward'].values**2)
+    else:
+        coarse = ds[f'coarse_{var}'].values
+        pred = ds[f'predicted_{var}'].values
+        truth = ds[f'input_{var}'].values
+
+    vmin = np.nanmin(truth)
+    vmax = np.nanmax(truth)
+    if not np.isfinite(vmin) or not np.isfinite(vmax):
+        vmin = np.nanmin(pred)
+        vmax = np.nanmax(pred)
+    if np.isclose(vmin, vmax):
+        vmin -= 0.5
+        vmax += 0.5
+
+    fig, axes = plt.subplots(
+        nrows=1,
+        ncols=3,
+        figsize=(18, 5),
+        constrained_layout=True,
+    )
+
+    ax_coarse, ax_pred, ax_truth = axes
+
+    im_coarse = ax_coarse.imshow(coarse[0], cmap='viridis', origin='lower', vmin=vmin, vmax=vmax)
+    im_pred = ax_pred.imshow(pred[0], cmap='viridis', origin='lower', vmin=vmin, vmax=vmax)
+    im_truth = ax_truth.imshow(truth[0], cmap='viridis', origin='lower', vmin=vmin, vmax=vmax)
+
+    ax_coarse.set_title('Coarse')
+    ax_pred.set_title('Downscaled')
+    ax_truth.set_title('Truth')
+
+    for ax in axes:
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+
+    fig.colorbar(im_pred, ax=axes, fraction=0.02, pad=0.02)
+
+    def update(frame: int):
+        im_coarse.set_data(coarse[frame])
+        im_pred.set_data(pred[frame])
+        im_truth.set_data(truth[frame])
+
+        ax_coarse.set_title(f'Coarse {var} {frame}')
+        ax_pred.set_title(f'Downscaled {var} {frame}')
+        ax_truth.set_title(f'Truth {var} {frame}')
+        return im_coarse, im_pred, im_truth
+
+    animation = FuncAnimation(fig, update, frames=range(ds.sizes['time']), interval=1000 / fps, blit=False)
+    animation.save(save_path, writer='pillow', fps=fps)
+    plt.close(fig)
+
+
 def plot_fields(ds, time_index: int, vars=['abs_vel', 'u_eastward', 'v_northward']) -> None:
     import matplotlib.pyplot as plt
     fig, axes = plt.subplots(
@@ -88,3 +150,6 @@ def area_mean_timeseries(ds, vars=['abs_vel', 'u_eastward', 'v_northward']) -> N
 
     fig.savefig('results/area_mean_timeseries.png', dpi=150)
     plt.close(fig)
+
+if __name__ == "__main__":
+    animate_variable('results/field.nc', var='abs_vel', save_path='results/animated_field.gif', fps=5)
