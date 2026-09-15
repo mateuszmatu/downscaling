@@ -24,7 +24,7 @@ def sample(cond: torch.Tensor, model: UNet, output_shape: tuple[int, int], out_c
     x = model(x0, cond, t0)
     return x[0].detach().cpu().numpy()  # Returns (out_channels, out_h, out_w)
 
-def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_channels: int = 64) -> None:
+def main(checkpoint_path: Path, input_netcdf: list[Path], output_netcdf: Path, base_channels: int = 64) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     try:
@@ -58,8 +58,13 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
     static_var_names = list(static_stats.keys()) if static_stats else []
 
     #still only surface
-    ids = xr.open_dataset(input_netcdf).isel(depth=0)
-
+    if len(input_netcdf) == 1:
+        ids = xr.open_dataset(input_netcdf[0]).isel(depth=0)
+    elif len(input_netcdf) > 1:
+        ids = xr.open_mfdataset(input_netcdf, combine='by_coords').isel(depth=0)
+    else:
+        raise ValueError("No input NetCDF files provided.")
+    
     ref_shape = ids.isel(time=0)[target_var_names[0]].shape
 
     pfields = {var: np.zeros((ids.time.size, ids.Y.size, ids.X.size), dtype=np.float32) for var in target_var_names}
@@ -78,7 +83,10 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
         for var in static_var_names:
             smean = static_stats[var]["mean"]
             sstd = static_stats[var]["std"]
-            hds = ids[var].coarsen(X=5, Y=5, boundary='trim').mean().values
+            hds_da = ids[var]
+            if 'time' in hds_da.dims:
+                hds_da = hds_da.isel(time=t)
+            hds = hds_da.coarsen(X=5, Y=5, boundary='trim').mean().values
             hfield = normalize(hds, smean, sstd)
             cond_parts.append(torch.from_numpy(hfield).unsqueeze(0).float())
 
@@ -143,7 +151,9 @@ if __name__ == "__main__":
     import plot_func as pf
     checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp7/model_epoch_last.pt")
     #checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp7/best_model.pt")
-    input_netcdf = Path('/home/mateuszm/downscaling/test_data/norkyst160_his_zdepth_20260913T00Z_m71_AN.nc')
+    input_netcdf = [Path('/home/mateuszm/downscaling/test_data/norkyst160_his_zdepth_20260912T00Z_m71_AN.nc'),
+                    Path('/home/mateuszm/downscaling/test_data/norkyst160_his_zdepth_20260913T00Z_m71_AN.nc'),
+                    Path('/home/mateuszm/downscaling/test_data/norkyst160_his_zdepth_20260914T00Z_m71_AN.nc')]
     output_netcdf = Path('results/field.nc')
     main(checkpoint_path, input_netcdf, output_netcdf)
     #ds_result = xr.open_dataset('results/predicted_temperature.nc')
