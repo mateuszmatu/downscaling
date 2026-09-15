@@ -64,6 +64,7 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
 
     pfields = {var: np.zeros((ids.time.size, ids.Y.size, ids.X.size), dtype=np.float32) for var in target_var_names}
     presiduals = {var: np.zeros((ids.time.size, ids.Y.size, ids.X.size), dtype=np.float32) for var in target_var_names}
+    pcoarse = {var: np.zeros((ids.time.size, ids.Y.size, ids.X.size), dtype=np.float32) for var in target_var_names}
 
     for t in range(ids.time.size):
         cond_parts = [] # what does this do?
@@ -98,6 +99,7 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
             cfield_norm = ((cfield * istd) + imean - tmean) / tstd
             cfield_resized_norm = resize_field(cfield_norm, tds.shape)
             cfield_resized = resize_field(tds.values, tds.shape)
+            coarse_resized = resize_field(tds_coarse.values, tds.shape)
 
             model_ch = shape[ch]
 
@@ -111,14 +113,17 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
 
             predicted_var = np.where(np.isfinite(tds.values), predicted_var, np.nan)
             residual_var = np.where(np.isfinite(tds.values), residual_var, np.nan)
+            coarse_var = np.where(np.isfinite(tds.values), coarse_resized, np.nan)
             pfields[var][t] = predicted_var
             presiduals[var][t] = residual_var
+            pcoarse[var][t] = coarse_var
 
         # Save the fields to NetCDF
         data_vars = {}
         for var in target_var_names:
             data_vars[f"predicted_{var}"] = (("time", "Y", "X"), pfields[var])
             data_vars[f"predicted_residual_{var}"] = (("time", "Y", "X"), presiduals[var])
+            data_vars[f"coarse_{var}"] = (("time", "Y", "X"), pcoarse[var])
 
         for var in input_var_names:
             data_vars[f"input_{var}"] = (("time", "Y", "X"), ids[var].values)
@@ -132,37 +137,95 @@ def main(checkpoint_path: Path, input_netcdf: Path, output_netcdf: Path, base_ch
             })
 
         output_ds.to_netcdf(output_netcdf)
-                
-def plot_predicted_field(ds, time_index: int) -> None:
-    import matplotlib.pyplot as plt
-    plt.figure(figsize=(30, 6))
 
-    plot1_data = ds['input_temperature'].values[time_index]
-    plot1_vmin = np.nanmin(plot1_data)
-    plot1_vmax = np.nanmax(plot1_data)
-    plt.subplot(1, 5, 1)
-    plt.imshow(plot1_data, cmap='viridis', origin='lower', vmin=plot1_vmin, vmax=plot1_vmax)
-    plt.title('Input Field')
-    plt.colorbar()
-    plt.subplot(1, 5, 2)
-    plt.imshow(ds['coarse_800m_temperature'].values[time_index], cmap='viridis', origin='lower')
-    plt.title('Coarse 800m Field')
-    plt.colorbar()
-    plt.subplot(1, 5, 3)
-    plt.imshow(ds['predicted_temperature'].values[time_index], cmap='viridis', origin='lower', vmin=plot1_vmin, vmax=plot1_vmax)
-    plt.title('Predicted Field')
-    plt.colorbar()
-    plt.tight_layout()
-    plt.subplot(1, 5, 4)
-    plt.imshow(ds['predicted_residual_temperature'].values[time_index], cmap='viridis', origin='lower')
-    plt.title('Predicted Residual Field')
-    plt.colorbar()
-    plt.subplot(1, 5, 5)
-    plt.imshow(ds['predicted_temperature'].values[time_index] - ds['input_temperature'].values[time_index], cmap='bwr', vmin=-1, vmax=1, origin='lower')
-    plt.title('Predicted - truth')
-    plt.colorbar()
-    plt.tight_layout()
-    plt.savefig('results/predicted_field_comparison.png')
+def plot_fields(ds, time_index: int, vars=['abs_vel', 'u_eastward', 'v_northward']) -> None:
+    import matplotlib.pyplot as plt
+    fig, axes = plt.subplots(
+        nrows=len(vars),
+        ncols=4,
+        figsize=(20, 4 * len(vars)),
+        constrained_layout=True,
+    )
+    ds = xr.open_dataset(ds).isel(time=time_index)
+
+    if len(vars) == 1:
+        axes = np.array([axes])
+
+    for i, var in enumerate(vars):
+        if var == 'abs_vel':
+            pfield = np.sqrt(ds['predicted_u_eastward'].values**2 + ds['predicted_v_northward'].values**2)
+            ifield = np.sqrt(ds['input_u_eastward'].values**2 + ds['input_v_northward'].values**2)
+            i800 = np.sqrt(ds['coarse_u_eastward'].values**2 + ds['coarse_v_northward'].values**2)
+        else:
+            pfield = ds[f'predicted_{var}'].values
+            ifield = ds[f'input_{var}'].values
+            i800 = ds[f'coarse_{var}'].values
+
+        vmin = np.nanmin(ifield)
+        vmax = np.nanmax(ifield)
+        diff_limit = max(abs(vmin)/2, abs(vmax)/2)
+        ax_coarse, ax_pred, ax_input, ax_diff = axes[i]
+
+        im_coarse = ax_coarse.imshow(i800, cmap='viridis', origin='lower', vmin=vmin, vmax=vmax)
+        ax_coarse.set_title(f"Input {var}")
+        fig.colorbar(im_coarse, ax=ax_coarse, fraction=0.046, pad=0.04)
+
+        im_pred = ax_pred.imshow(pfield, cmap='viridis', origin='lower', vmin=vmin, vmax=vmax)
+        ax_pred.set_title(f"Downscaled {var}")
+        fig.colorbar(im_pred, ax=ax_pred, fraction=0.046, pad=0.04)
+
+        im_input = ax_input.imshow(ifield, cmap='viridis', origin='lower', vmin=vmin, vmax=vmax)
+        ax_input.set_title(f"Truth {var}")
+        fig.colorbar(im_input, ax=ax_input, fraction=0.046, pad=0.04)
+
+        im_diff = ax_diff.imshow(pfield - ifield, cmap='bwr', origin='lower', vmin=-diff_limit, vmax=diff_limit)
+        ax_diff.set_title(f"Downscaled - Truth {var}")
+        fig.colorbar(im_diff, ax=ax_diff, fraction=0.046, pad=0.04)
+
+    fig.savefig('results/predicted_fields.png', dpi=150)
+    plt.close(fig)
+
+
+def area_mean_timeseries(ds, vars=['abs_vel', 'u_eastward', 'v_northward']) -> None:
+    import matplotlib.pyplot as plt
+    fig, axes = plt.subplots(
+        nrows=len(vars),
+        ncols=1,
+        figsize=(12, 3.5 * len(vars)),
+        constrained_layout=True,
+    )
+    ds = xr.open_dataset(ds)
+    times = ds['time'].values
+
+    if len(vars) == 1:
+        axes = np.array([axes])
+
+    for i, var in enumerate(vars):
+        if var == 'abs_vel':
+            pred = np.sqrt(ds['predicted_u_eastward'].values**2 + ds['predicted_v_northward'].values**2)
+            truth = np.sqrt(ds['input_u_eastward'].values**2 + ds['input_v_northward'].values**2)
+        else:
+            pred = ds[f'predicted_{var}'].values
+            truth = ds[f'input_{var}'].values
+
+        diff = pred - truth
+
+        ax = axes[i]
+        ax.plot(times, np.nanmean(truth, axis=(1, 2)), label='Truth Area Mean', linewidth=2)
+        ax.plot(times, np.nanmean(pred, axis=(1, 2)), label='Downscaled Area Mean', linewidth=2)
+        ax.plot(times, np.nanmean(diff, axis=(1, 2)), label='Downscaled - Truth', linewidth=1.5, linestyle='--')
+        ax.axhline(0.0, color='black', linewidth=1, alpha=0.5)
+        ax.set_title(f"Area Mean Timeseries {var}")
+        ax.set_ylabel('Area mean')
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc='best')
+
+    axes[-1].set_xlabel('Time')
+
+    fig.savefig('results/area_mean_timeseries.png', dpi=150)
+    plt.close(fig)
+
+
 
 
 if __name__ == "__main__":
@@ -172,4 +235,5 @@ if __name__ == "__main__":
     output_netcdf = Path('results/field.nc')
     main(checkpoint_path, input_netcdf, output_netcdf)
     #ds_result = xr.open_dataset('results/predicted_temperature.nc')
-    #plot_predicted_field(ds_result, time_index=-1)
+    plot_fields(output_netcdf, time_index=-1)
+    area_mean_timeseries(output_netcdf)
