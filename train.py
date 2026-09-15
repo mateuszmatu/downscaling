@@ -291,8 +291,8 @@ def main(
 
 
 if __name__ == "__main__":  
-    data = Path('/home/mateuszm/downscaling_1/zarr/test.zarr')
-    #data = Path('/home/mateuszm/downscaling_1/zarr/nk160_m71_20240501-20260531.zarr')
+    #data = Path('/home/mateuszm/downscaling_1/zarr/test.zarr')
+    data = Path('/home/mateuszm/downscaling_1/zarr/nk160_m71_20240501-20260531.zarr')
     main(
         data,
         val_split=0.2,
