@@ -67,9 +67,11 @@ def main(checkpoint_path: Path, input_netcdf: list[Path], output_netcdf: Path, b
     
     ref_shape = ids.isel(time=0)[target_var_names[0]].shape
 
+    tds_coarse = ids.isel(time=0)[target_var_names[0]].coarsen(X=5, Y=5, boundary='trim').mean()
+
     pfields = {var: np.zeros((ids.time.size, ids.Y.size, ids.X.size), dtype=np.float32) for var in target_var_names}
     presiduals = {var: np.zeros((ids.time.size, ids.Y.size, ids.X.size), dtype=np.float32) for var in target_var_names}
-    pcoarse = {var: np.zeros((ids.time.size, ids.Y.size, ids.X.size), dtype=np.float32) for var in target_var_names}
+    pcoarse = {var: np.zeros((ids.time.size, tds_coarse.Y.size, tds_coarse.X.size), dtype=np.float32) for var in target_var_names}
 
     for t in range(ids.time.size):
         cond_parts = [] # what does this do?
@@ -107,7 +109,6 @@ def main(checkpoint_path: Path, input_netcdf: list[Path], output_netcdf: Path, b
             cfield_norm = ((cfield * istd) + imean - tmean) / tstd
             cfield_resized_norm = resize_field(cfield_norm, tds.shape)
             cfield_resized = resize_field(tds.values, tds.shape)
-            coarse_resized = resize_field(tds_coarse.values, tds.shape)
 
             model_ch = shape[ch]
 
@@ -121,7 +122,7 @@ def main(checkpoint_path: Path, input_netcdf: list[Path], output_netcdf: Path, b
 
             predicted_var = np.where(np.isfinite(tds.values), predicted_var, np.nan)
             residual_var = np.where(np.isfinite(tds.values), residual_var, np.nan)
-            coarse_var = np.where(np.isfinite(tds.values), coarse_resized, np.nan)
+            coarse_var = np.where(np.isfinite(tds_coarse.values), tds_coarse.values, np.nan)
             pfields[var][t] = predicted_var
             presiduals[var][t] = residual_var
             pcoarse[var][t] = coarse_var
@@ -131,10 +132,42 @@ def main(checkpoint_path: Path, input_netcdf: list[Path], output_netcdf: Path, b
         for var in target_var_names:
             data_vars[f"predicted_{var}"] = (("time", "Y", "X"), pfields[var])
             data_vars[f"predicted_residual_{var}"] = (("time", "Y", "X"), presiduals[var])
-            data_vars[f"coarse_{var}"] = (("time", "Y", "X"), pcoarse[var])
+            data_vars[f"coarse_{var}"] = (("time", "Y800", "X800"), pcoarse[var])
 
         for var in input_var_names:
             data_vars[f"input_{var}"] = (("time", "Y", "X"), ids[var].values)
+
+        if 'lon' in ids:
+            lon = ids['lon']
+            if lon.dims == ('X',):
+                data_vars['lon'] = (('X',), lon.values)
+            elif lon.dims == ('Y', 'X'):
+                data_vars['lon'] = (('Y', 'X'), lon.values)
+            else:
+                data_vars['lon'] = lon
+
+        if 'lat' in ids:
+            lat = ids['lat']
+            if lat.dims == ('Y',):
+                data_vars['lat'] = (('Y',), lat.values)
+            elif lat.dims == ('Y', 'X'):
+                data_vars['lat'] = (('Y', 'X'), lat.values)
+            else:
+                data_vars['lat'] = lat
+
+        if 'longitude' in ids and 'lon' not in data_vars:
+            lon = ids['longitude']
+            if lon.dims == ('X',):
+                data_vars['lon'] = (('X',), lon.values)
+            elif lon.dims == ('Y', 'X'):
+                data_vars['lon'] = (('Y', 'X'), lon.values)
+
+        if 'latitude' in ids and 'lat' not in data_vars:
+            lat = ids['latitude']
+            if lat.dims == ('Y',):
+                data_vars['lat'] = (('Y',), lat.values)
+            elif lat.dims == ('Y', 'X'):
+                data_vars['lat'] = (('Y', 'X'), lat.values)
 
         output_ds = xr.Dataset(
             data_vars,
@@ -142,6 +175,8 @@ def main(checkpoint_path: Path, input_netcdf: list[Path], output_netcdf: Path, b
                 "time": ids.time.values,
                 "Y": ids.Y.values,
                 "X": ids.X.values,
+                "Y800": tds_coarse.Y.values,
+                "X800": tds_coarse.X.values,
             })
 
         output_ds.to_netcdf(output_netcdf)
@@ -152,10 +187,11 @@ if __name__ == "__main__":
     checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp7/model_epoch_last.pt")
     #checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp7/best_model.pt")
     input_netcdf = [Path('/home/mateuszm/downscaling/test_data/norkyst160_his_zdepth_20260912T00Z_m71_AN.nc'),
-                    Path('/home/mateuszm/downscaling/test_data/norkyst160_his_zdepth_20260913T00Z_m71_AN.nc'),
-                    Path('/home/mateuszm/downscaling/test_data/norkyst160_his_zdepth_20260914T00Z_m71_AN.nc')]
+                    #Path('/home/mateuszm/downscaling/test_data/norkyst160_his_zdepth_20260913T00Z_m71_AN.nc'),
+                    #Path('/home/mateuszm/downscaling/test_data/norkyst160_his_zdepth_20260914T00Z_m71_AN.nc')
+    ]
     output_netcdf = Path('results/field.nc')
-    #main(checkpoint_path, input_netcdf, output_netcdf)
+    main(checkpoint_path, input_netcdf, output_netcdf)
     #ds_result = xr.open_dataset('results/predicted_temperature.nc')
     pf.plot_fields(output_netcdf, time_index=-1)
     pf.area_mean_timeseries(output_netcdf)
