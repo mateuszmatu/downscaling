@@ -50,7 +50,6 @@ class Up(nn.Module):
 
     def forward(self, x: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
         x = self.up(x)
-        # Light smoothing after transposed conv reduces checkerboard-like artifacts.
         x = F.interpolate(x, size=skip.shape[-2:], mode="bilinear", align_corners=False)
         x = torch.cat([x, skip], dim=1)
         return self.conv(x)
@@ -91,23 +90,47 @@ class UNet(nn.Module):
         nn.init.zeros_(self.outc.weight)
         nn.init.zeros_(self.outc.bias)
 
-    def forward(self, x: torch.Tensor, cond: torch.Tensor, timesteps: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, cond: torch.Tensor, timesteps: torch.Tensor, debug: bool = False) -> torch.Tensor:
 
         cond = F.interpolate(cond, size=x.shape[2:], mode='bilinear', align_corners=False)
         x = torch.cat([x, cond], dim=1)
         t_emb = self.time_mlp(timesteps)
 
         x1 = self.inc(x)
+        if debug:
+            print("after inc: shape=", x1.shape, "channels=", x1.shape[1])
         x2 = self.down1(x1)
+        if debug:
+            print("after down1: shape=", x2.shape, "channels=", x2.shape[1])
         x3 = self.down2(x2)
+        if debug:
+            print("after down2: shape=", x3.shape, "channels=", x3.shape[1])
         x4 = self.down3(x3)
+        if debug:
+            print("after down3: shape=", x4.shape, "channels=", x4.shape[1])
         x5 = self.down4(x4)
+        if debug:
+            print("after down4: shape=", x5.shape, "channels=", x5.shape[1])
         x5 = x5 + t_emb[:, :, None, None]
+        if debug:
+            print("after add t_emb: shape=", x5.shape, "channels=", x5.shape[1])
 
         x = self.bottleneck(x5)
-        x = self.up4(x, x4)
+        if debug:
+            print("after bottleneck: shape=", x.shape, "channels=", x.shape[1])
+        x = self.up4(x, x4) # x4 is the skip connection from the downsampling path
+        if debug:
+            print("after up4: shape=", x.shape, "channels=", x.shape[1])
         x = self.up3(x, x3)
+        if debug:
+            print("after up3: shape=", x.shape, "channels=", x.shape[1])
         x = self.up2(x, x2)
+        if debug:
+            print("after up2: shape=", x.shape, "channels=", x.shape[1])
         x = self.up1(x, x1)
+        if debug:
+            print("after up1: shape=", x.shape, "channels=", x.shape[1])
         x = self.outc(x)
+        if debug:
+            print("after outc: shape=", x.shape, "channels=", x.shape[1])
         return x

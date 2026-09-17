@@ -169,10 +169,11 @@ def main(
     max_epochs: int = 50,
     warmup_epochs: int = 5,
     checkpoint_output_dir: Path = Path("checkpoints"),
+    log_output_dir: Path = Path("logs"),
     ema_decay: float = 0.99,
     residuals: bool = True,) -> None:
 
-    log_file = make_log_file()
+    log_file = make_log_file(dir=log_output_dir)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if device.type == 'cuda':
         torch.backends.cudnn.benchmark = True
@@ -198,6 +199,10 @@ def main(
     sample = dataset[0]
     cond_channels = sample["input"].shape[0]
     target_channels = sample["target"].shape[0]
+    print(sample["input"].shape)
+    print(sample["target"].shape)
+    print('cond_channels:', cond_channels)
+    print('target_channels:', target_channels)
     input_mean, input_std = stats(dataset.input_stats, dataset.input_vars, device)
     target_mean, target_std = stats(dataset.target_stats, dataset.target_vars, device)
 
@@ -291,12 +296,14 @@ def main(
 
 
 if __name__ == "__main__":  
-    #data = Path('/home/mateuszm/downscaling_1/zarr/test.zarr')
-    data = Path('/home/mateuszm/downscaling_1/zarr/nk160_m71_20240501-20260531.zarr')
+    data = Path('/home/mateuszm/downscaling_1/zarr/test.zarr')
+    #data = Path('/home/mateuszm/downscaling_1/zarr/nk160_m71_20240501-20260531.zarr')
     main(
         data,
         val_split=0.2,
-        checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp7'),
+        checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp1'),
+        log_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp1'),
         max_epochs=200,
+        lr = 1e-3,
         residuals=True,
     )
