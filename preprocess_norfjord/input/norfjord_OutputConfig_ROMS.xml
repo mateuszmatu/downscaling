@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cdm_ncwriter_config>
+<!---->
+<!---->
+<default filetype="netcdf4" compressionLevel="0" />
+<!-- h -->
+<variable name="h">
+<attribute name="long_name" type="string" value="sea_floor_depth_below_sea_level"/>
+<attribute name="standard_name" type="string" value="sea_floor_depth_below_sea_level"/>
+</variable>
+<!-- zeta -->
+<variable name="zeta" type="short">
+<attribute name="_FillValue" value="-32767" type="short" />
+<attribute name="add_offset" value="0" type="float" />
+<attribute name="scale_factor" value="0.001" type="float" />
+<attribute name="long_name" type="string" value="Sea surface height above geoid"/>
+<attribute name="standard_name" type="string" value="sea_surface_elevation"/>
+</variable>
+<!-- AKs -->
+<variable name="ln_AKs" type="short">
+<attribute name="_FillValue" value="-32767" type="short" />
+<attribute name="add_offset" value="0" type="float" />
+<attribute name="scale_factor" value="0.0001" type="float" />
+<attribute name="long_name" type="string" value="Salinity vertical diffusion coefficient"/>
+<attribute name="standard_name" type="string" value="salinity_vertical_diffusion_coefficient"/>
+</variable>
+<!-- salt -->
+<variable name="salt" type="short">
+<attribute name="_FillValue" value="-32767" type="short" />
+<attribute name="add_offset" value="30" type="float" />
+<attribute name="scale_factor" value="0.001" type="float" />
+<attribute name="standard_name" type="string" value="sea_water_salinity"/>
+</variable>
+<!-- temp -->
+<variable name="temp" type="short">
+<attribute name="_FillValue" value="-32767" type="short" />
+<attribute name="add_offset" value="0" type="float" />
+<attribute name="scale_factor" value="0.01" type="float" />
+<attribute name="long_name" type="string" value="Sea water potential temperature"/>
+<attribute name="standard_name" type="string" value="sea_water_potential_temperature"/>
+</variable>
+<!-- u -->
+<variable name="u" type="short">
+<attribute name="_FillValue" value="-32767" type="short" />
+<attribute name="add_offset" value="0" type="float" />
+<attribute name="scale_factor" value="0.001" type="float" />
+<attribute name="long_name" type="string" value="Sea water x velocity"/>
+<attribute name="standard_name" type="string" value="x_sea_water_velocity"/>
+</variable>
+<!-- v -->
+<variable name="v" type="short">
+<attribute name="_FillValue" value="-32767" type="short" />
+<attribute name="add_offset" value="0" type="float" />
+<attribute name="scale_factor" value="0.001" type="float" />
+<attribute name="long_name" type="string" value="Sea water y velocity"/>
+<attribute name="standard_name" type="string" value="y_sea_water_velocity"/>
+</variable>
+</cdm_ncwriter_config>
