@@ -5,7 +5,6 @@
 #$ -l h_rss=8G
 #$ -l mem_free=8G 
 #$ -l h_data=8G
-#$ -wd /lustre/storeA/users/mateuszm/NF160/
 
 
 bash -l
