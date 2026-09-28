@@ -1162,7 +1162,7 @@
   <variable name="v">
     <attribute name="grid_mapping" value="projection_polar_stereographic" />
   </variable>
-   <variable name="AKs">
+   <variable name="ln_AKs">
     <attribute name="grid_mapping" value="projection_polar_stereographic" />
   </variable>
   <variable name="Uwind">
