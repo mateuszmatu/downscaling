@@ -159,7 +159,7 @@ def lr_scheduler(
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
 def main(
-    data_dir: Path,
+    data_dir: Path | list[Path],
     checkpoint: str | None = None,
     batch_size: int = 16,
     val_split: float = 0.1,
@@ -182,29 +182,31 @@ def main(
         ckpt = torch.load(checkpoint, map_location=device)
 
     # Loading data
-
-    dataset = dataloader.ROMSDownscalingDataset(data_dir=data_dir)
+    dataset = dataloader.ROMSDownscalingDataset(data_dir=data_dir,
+                                                input_vars=['u_eastward_0', 'v_northward_0'],
+                                                target_vars=['u_eastward_0', 'v_northward_0'],
+                                                static_vars=['h_0'])
 
     datasets = train_val_dataset(dataset, val_split=val_split)
     train_dataset = datasets['train']
     val_dataset = datasets['val']
 
-    train_time_indices = [dataset.valid_time_idx[i] for i in train_dataset.indices]
-    dataset.input_stats = dataset._compute_stats(dataset.input_vars, coarsen=True, time_indices=train_time_indices)
-    dataset.target_stats = dataset._compute_stats(dataset.target_vars, coarsen=False, time_indices=train_time_indices)
+    dataset.input_stats = dataset._compute_stats(dataset.input_vars, coarsen=True, sample_indices=train_dataset.indices)
+    dataset.target_stats = dataset._compute_stats(dataset.target_vars, coarsen=False, sample_indices=train_dataset.indices)
+    input_stats, target_stats, static_stats = dataset.input_stats, dataset.target_stats, dataset.static_stats
 
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=torch.cuda.is_available())
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, num_workers=0, pin_memory=torch.cuda.is_available())
-
     sample = dataset[0]
     cond_channels = sample["input"].shape[0]
     target_channels = sample["target"].shape[0]
     print(sample["input"].shape)
     print(sample["target"].shape)
+    print('time length:', len(dataset))
     print('cond_channels:', cond_channels)
     print('target_channels:', target_channels)
-    input_mean, input_std = stats(dataset.input_stats, dataset.input_vars, device)
-    target_mean, target_std = stats(dataset.target_stats, dataset.target_vars, device)
+    input_mean, input_std = stats(input_stats, dataset.input_vars, device)
+    target_mean, target_std = stats(target_stats, dataset.target_vars, device)
 
     model = UNet(in_channels=target_channels, cond_channels=cond_channels, base_channels=base_channels).to(device)
     if device.type == 'cuda':
@@ -268,9 +270,9 @@ def main(
                     'scheduler_state_dict': scheduler.state_dict(),
                     'scaler_state_dict': scaler.state_dict(),
                     'ema_model_state_dict': raw_ema.state_dict(),
-                    'input_stats': dataset.input_stats,
-                    'target_stats': dataset.target_stats,
-                    'static_stats': dataset.static_stats,
+                    'input_stats': input_stats,
+                    'target_stats': target_stats,
+                    'static_stats': static_stats,
                     'residuals': residuals,
                 }, ckpt_path)
 
@@ -287,9 +289,9 @@ def main(
                 'scheduler_state_dict': scheduler.state_dict(),
                 'scaler_state_dict': scaler.state_dict(),
                 'ema_model_state_dict': raw_ema.state_dict(),
-                'input_stats': dataset.input_stats,
-                'target_stats': dataset.target_stats,
-                'static_stats': dataset.static_stats,
+                'input_stats': input_stats,
+                'target_stats': target_stats,
+                'static_stats': static_stats,
                 'residuals': residuals,
             }, ckpt_path)
             
@@ -297,6 +299,8 @@ def main(
 
 if __name__ == "__main__":  
     data = Path('/home/mateuszm/downscaling_1/zarr/test.zarr')
+    data = [Path('/home/mateuszm/downscaling/yaml/A01_1_test.zarr'), Path('/home/mateuszm/downscaling/yaml/A01_2_test.zarr')]
+    #data = Path('/home/mateuszm/downscaling/yaml/A01_1_test.zarr')
     #data = Path('/home/mateuszm/downscaling_1/zarr/nk160_m71_20240501-20260531.zarr')
     main(
         data,

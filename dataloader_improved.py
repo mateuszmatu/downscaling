@@ -32,7 +32,7 @@ class ROMSDownscalingDataset(Dataset):
 
     def __init__(
             self,
-            data_dir: Path,
+            data_dir: Path | list[Path],
             input_vars: list[str] = ['u_eastward_0', 'v_northward_0'], #['temperature_0', 'u_eastward_0', 'v_northward_0', 'salinity_0'],
             target_vars: list[str] = ['u_eastward_0', 'v_northward_0'], #['temperature_0', 'u_eastward_0', 'v_northward_0', 'salinity_0'],
             static_vars: list[str] = ['h'],
@@ -47,32 +47,43 @@ class ROMSDownscalingDataset(Dataset):
         self.y_dim = 'Y'
         self.x_dim = 'X'
 
-        # Open with native chunks to avoid the chunk-mismatch warning/penalty
-        ds_zarr = xr.open_zarr(data_dir, consolidated=False)
-        if 'ensemble' in ds_zarr.dims:
-            ds_zarr = ds_zarr.isel(ensemble=0)
-
-        self.variable_names = list(ds_zarr.attrs.get('variables', []))
-        self.var_to_idx = {var: i for i, var in enumerate(self.variable_names)}
-        ny, nx = (int(v) for v in ds_zarr.attrs.get('field_shape'))
-        self.field_shape = (ny, nx)
+        paths = [data_dir] if isinstance(data_dir, (str, Path)) else list(data_dir)
 
         # Collect every unique variable we need (dynamic + static), preserving order
         all_vars = list(dict.fromkeys(input_vars + target_vars + (static_vars or [])))
-        var_indices = [self.var_to_idx[v] for v in all_vars]
         self._all_vars = all_vars
         self._var_to_arr_idx = {v: i for i, v in enumerate(all_vars)}
 
-        # ── Single zarr read: (time, n_vars, cell) → (T, V, Y, X) ──────────
-        print(f"Loading {len(all_vars)} variable(s) from zarr...", flush=True)
-        data_da = ds_zarr['data'].isel(variable=var_indices).transpose('time', 'variable', 'cell')
-        raw = data_da.load().values.astype(np.float32)   # (T, V, C)
-        self._data = raw.reshape(raw.shape[0], len(all_vars), ny, nx)  # (T, V, Y, X)
-        self.total_times = self._data.shape[0]
-        print(f"Loaded {self.total_times} timesteps into RAM "
+        # Open with native chunks to avoid the chunk-mismatch warning/penalty
+        stores = []
+        for p in paths:
+            ds_zarr = xr.open_zarr(p, consolidated=False)
+            if 'ensemble' in ds_zarr.dims:
+                ds_zarr = ds_zarr.isel(ensemble=0)
+            stores.append(ds_zarr)
+
+        shapes = [(int(z.sizes['time']), *(int(v) for v in z.attrs.get('field_shape'))) for z in stores]
+        if len(set(shapes)) != 1:
+            raise ValueError(f"All sources must have the same (time, Y, X) shape, got {dict(zip(paths, shapes))}")
+        n_times, ny, nx = shapes[0]
+        self.field_shape = (ny, nx)
+        self.total_times = n_times
+
+        # ── One zarr read per source into a preallocated (S, T, V, Y, X) array ──
+        self._data = np.empty((len(stores), n_times, len(all_vars), ny, nx), dtype=np.float32)
+        for s, (p, ds_zarr) in enumerate(zip(paths, stores)):
+            print(f"Loading {len(all_vars)} variable(s) from {p}...", flush=True)
+            var_to_idx = {var: i for i, var in enumerate(ds_zarr.attrs.get('variables', []))}
+            data_da = ds_zarr['data'].isel(variable=[var_to_idx[v] for v in all_vars]).transpose('time', 'variable', 'cell')
+            self._data[s] = data_da.load().values.reshape(n_times, len(all_vars), ny, nx)
+        self.n_sources = len(stores)
+        print(f"Loaded {self.n_sources} source(s) x {self.total_times} timesteps into RAM "
               f"({self._data.nbytes / 1024**2:.0f} MB).", flush=True)
 
-        self.valid_time_idx = self._valid_time_idx()
+        # Each sample is a (source, time) pair
+        self.samples = self._valid_samples()
+        self.sample_source = [s for s, _ in self.samples]
+        self.valid_time_idx = [t for _, t in self.samples]
         self.input_stats = self._compute_stats(self.input_vars, coarsen=True)
         self.target_stats = self._compute_stats(self.target_vars, coarsen=False)
         self.static_stats = {}
@@ -81,20 +92,20 @@ class ROMSDownscalingDataset(Dataset):
     # ── Public interface ──────────────────────────────────────────────────────
 
     def __len__(self) -> int:
-        return len(self.valid_time_idx)
+        return len(self.samples)
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
-        if idx < 0 or idx >= len(self.valid_time_idx):
+        if idx < 0 or idx >= len(self.samples):
             raise IndexError(
-                f"Index {idx} is out of bounds for dataset of length {len(self.valid_time_idx)}"
+                f"Index {idx} is out of bounds for dataset of length {len(self.samples)}"
             )
 
-        t = self.valid_time_idx[idx]
+        s, t = self.samples[idx]
 
         target_parts = []
         target_mask_parts = []
         for var in self.target_vars:
-            arr = self._data[t, self._var_to_arr_idx[var]]          # (Y, X)
+            arr = self._data[s, t, self._var_to_arr_idx[var]]       # (Y, X)
             mask = np.isfinite(arr).astype(np.float32)
             arr = self._normalize(arr, self.target_stats[var]['mean'],
                                   self.target_stats[var]['std'])
@@ -103,7 +114,7 @@ class ROMSDownscalingDataset(Dataset):
 
         input_parts = []
         for var in self.input_vars:
-            arr = self._data[t, self._var_to_arr_idx[var]]          # (Y, X)
+            arr = self._data[s, t, self._var_to_arr_idx[var]]       # (Y, X)
             arr_c = _block_mean(arr, self.coarsen_factor)            # (Y_c, X_c)
             arr_c = self._normalize(arr_c, self.input_stats[var]['mean'],
                                     self.input_stats[var]['std'])
@@ -113,13 +124,14 @@ class ROMSDownscalingDataset(Dataset):
         target_mask_tensor = torch.cat(target_mask_parts, dim=0)
         input_tensor = torch.cat(input_parts, dim=0)
         if self.static_tensor is not None:
-            input_tensor = torch.cat([input_tensor, self.static_tensor], dim=0)
+            input_tensor = torch.cat([input_tensor, self.static_tensor[s]], dim=0)
 
         return {
             'input': input_tensor,
             'target': target_tensor,
             'target_mask': target_mask_tensor,
             'time_idx': idx,
+            'source_idx': s,
         }
 
     # ── Internal helpers ──────────────────────────────────────────────────────
@@ -128,15 +140,15 @@ class ROMSDownscalingDataset(Dataset):
         arr = np.where(np.isfinite(arr), arr, mean)
         return ((arr - mean) / std).astype(np.float32)
 
-    def _valid_time_idx(self) -> list[int]:
-        """Vectorised: find timesteps where at least one target cell is finite."""
+    def _valid_samples(self) -> list[tuple[int, int]]:
+        """Vectorised: find (source, time) pairs where at least one target cell is finite."""
         target_indices = [self._var_to_arr_idx[v] for v in self.target_vars]
-        target_data = self._data[:, target_indices, :, :]       # (T, n_target, Y, X)
-        has_finite = np.isfinite(target_data).any(axis=(1, 2, 3))  # (T,)
-        return list(np.where(has_finite)[0])
+        target_data = self._data[:, :, target_indices]               # (S, T, n_target, Y, X)
+        has_finite = np.isfinite(target_data).any(axis=(2, 3, 4))    # (S, T)
+        return [(int(s), int(t)) for s, t in zip(*np.where(has_finite))]
 
     def _compute_stats(self, var_names: list[str], coarsen: bool = False,
-                       time_indices: list[int] | None = None) -> dict[str, dict[str, float]]:
+                       sample_indices: list[int] | None = None) -> dict[str, dict[str, float]]:
         """Compute mean/std using the same moment-based formula as the Zarr loader.
 
         This matches the statistics used in dataloader_zarr.py precisely:
@@ -144,7 +156,7 @@ class ROMSDownscalingDataset(Dataset):
             variance = sum(x^2) / N - mean^2
             std = sqrt(max(variance, 0))
         """
-        indices = self.valid_time_idx if time_indices is None else list(time_indices)
+        indices = range(len(self.samples)) if sample_indices is None else sample_indices
         stats: dict[str, dict[str, float]] = {}
 
         for var in var_names:
@@ -153,7 +165,8 @@ class ROMSDownscalingDataset(Dataset):
             total_sum_sq = 0.0
 
             for idx in indices:
-                arr = self._data[idx, self._var_to_arr_idx[var]]  # (Y, X)
+                s, t = self.samples[idx]
+                arr = self._data[s, t, self._var_to_arr_idx[var]]  # (Y, X)
                 if coarsen:
                     arr = _block_mean(arr, self.coarsen_factor)   # (Y_c, X_c)
 
@@ -177,10 +190,11 @@ class ROMSDownscalingDataset(Dataset):
         return stats
 
     def _static_vars(self) -> torch.Tensor:
+        """Static fields per source, normalized with stats pooled over all sources."""
         tensors = []
         for var in self.static_vars:
-            arr = self._data[0, self._var_to_arr_idx[var]]  # (Y, X) — static, use time=0
-            arr_c = _block_mean(arr, self.coarsen_factor)    # (Y_c, X_c)
+            arr = self._data[:, 0, self._var_to_arr_idx[var]]  # (S, Y, X) — static, use time=0
+            arr_c = _block_mean(arr, self.coarsen_factor)       # (S, Y_c, X_c)
 
             valid_values = arr_c[np.isfinite(arr_c)].astype(np.float64)
             if valid_values.size == 0:
@@ -193,5 +207,5 @@ class ROMSDownscalingDataset(Dataset):
 
             self.static_stats[var] = {'mean': mean, 'std': std}
             arr_c = self._normalize(arr_c, mean, std)
-            tensors.append(torch.from_numpy(arr_c[np.newaxis]))  # (1, Y_c, X_c)
-        return torch.cat(tensors, dim=0)                         # (n_static, Y_c, X_c)
+            tensors.append(torch.from_numpy(arr_c[:, np.newaxis]))  # (S, 1, Y_c, X_c)
+        return torch.cat(tensors, dim=1)                            # (S, n_static, Y_c, X_c)
