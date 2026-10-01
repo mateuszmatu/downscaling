@@ -161,7 +161,7 @@ def lr_scheduler(
 def main(
     data_dir: Path | list[Path],
     checkpoint: str | None = None,
-    batch_size: int = 16,
+    batch_size: int = 8,
     val_split: float = 0.1,
     base_channels: int = 64,
     lr: float = 1e-4,
