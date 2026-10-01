@@ -34,7 +34,7 @@ def transform(start_date, end_date, domain):
             except: 
                 pass
 
-        destagg = abs_path + f'destagg_{domain}.nc'
+        destagg = f'/lustre/storeB/users/mateuszm/NF160/tmp/destagg_{domain}.nc'
         destagg_config_file = abs_path + 'input/norfjord_OutputConfig_ROMS.xml'
         input_config = abs_path + f'input/Norfjords_{domain}_vertint_input.ncml'
         config_file = abs_path + f'input/norfjord_destagg_{domain}.cfg'
@@ -47,7 +47,7 @@ def transform(start_date, end_date, domain):
         fix_u_and_v(destagg)
 
         #rotate u and v
-        rotate = abs_path+f'rotated_{domain}.nc'
+        rotate = f'/lustre/storeB/users/mateuszm/NF160/tmp/rotated_{domain}.nc'
         o = open(f"/home/mateuszm/downscaling/preprocess_norfjord/fimex_N160_{domain}.cfg","w")
         incfg = abs_path+'fimex/fimex_rot.cfg'
         for line in open(incfg):
