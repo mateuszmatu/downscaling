@@ -7,11 +7,11 @@
 #$ -N anemoi-datasets
 
 OUTDIR=/lustre/storeB/users/mateuszm/NF160/zarr/
-ZARRFILE=$OUTDIR/ <--- PUT IN .ZARR FILE --->
-YAMLFILE=/home/mateuszm/downscaling/preprocess_norfjord/yaml/ <--- PUT IN .YAML FILE --->
+ZARRFILE=$OUTDIR/A01_1.zarr
+YAMLFILE=/home/mateuszm/downscaling/preprocess_norfjord/yaml/A01_1.yaml
 
 conda deactivate
-source $FOCCUS_DIR/python-envs/anemoi-env-9-6-26/bin/activate
+source /lustre/storeB/project/fou/hi/foccus/python-envs/anemoi-env-9-6-26/bin/activate
 
 # No more parallell, because there are some buggs where it doesn't finish. 
 # This is more consistent. 
