@@ -7,8 +7,8 @@
 #$ -N anemoi-datasets
 
 OUTDIR=/lustre/storeB/users/mateuszm/NF160/zarr/
-ZARRFILE=$OUTDIR/A01_1.zarr
-YAMLFILE=/home/mateuszm/downscaling/preprocess_norfjord/yaml/A01_1.yaml
+ZARRFILE=$OUTDIR/A03_1.zarr
+YAMLFILE=/home/mateuszm/downscaling/preprocess_norfjord/yaml/A03_1.yaml
 
 conda deactivate
 source /lustre/storeB/project/fou/hi/foccus/python-envs/anemoi-env-9-6-26/bin/activate
