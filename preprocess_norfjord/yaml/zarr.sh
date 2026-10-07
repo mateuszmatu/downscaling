@@ -23,4 +23,4 @@ do
     anemoi-datasets load $ZARRFILE --part $i/10
 done
 
-anemoi-datasets finalize $ZARRFILE
+anemoi-datasets finalise $ZARRFILE
