@@ -1,0 +1,42 @@
+dates:
+  start: '2024-01-01T01:00:00'
+  end: '2025-01-01T00:00:00'
+  frequency: 1h
+  missing: []
+
+build:
+  group_by: 24
+statistics:
+  allow_nans:
+  - temp
+  - salt
+  - u_eastward
+  - v_northward
+  - zeta
+  - Uwind
+  - Vwind
+input:
+  join:
+    - netcdf:
+        path: /lustre/storeB/users/mateuszm/NF160/cutout-regions/A13_1/*
+        param:
+        - temp
+        - salt
+        - u_eastward
+        - v_northward
+        level: 0
+    - netcdf:
+        path: /lustre/storeB/users/mateuszm/NF160/cutout-regions/A13_1/*
+        param:
+        - zeta
+        - Uwind
+        - Vwind
+    - repeated_dates:
+        mode: constant
+        source:
+          netcdf:
+            path: /lustre/storeB/users/mateuszm/NF160/cutout-regions/A13_1/norfjords_160m_his.nc4_2024010101-2024010200_zdepth_A13_1
+            param:
+            - h
+            - sea_mask
+
