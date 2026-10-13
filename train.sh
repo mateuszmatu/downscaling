@@ -1,11 +1,11 @@
 #$ -S /bin/bash
 #$ -l h_rt=72:00:00
+#$ -pe shmem-4 4
 #$ -q gpu-r8.q
-#$ -l h=sm-nx10077659-bc-compute.int.met.no
-##$ -l h_rss=200G,mem_free=200G,h=sm-nx10077659-bc-compute.int.met.no
+#$ -l mem_free=50G,h_rss=50G
 #$ -wd /home/mateuszm/downscaling/
-#$ -o output/
-#$ -e output/
+#$ -o logs/
+#$ -e logs/
 
 conda activate myenv
 
