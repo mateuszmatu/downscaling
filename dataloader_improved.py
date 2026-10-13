@@ -6,6 +6,9 @@ from torch.utils.data import Dataset
 import xarray as xr
 
 
+_LOAD_BLOCK_BYTES = 64 * 1024**2
+
+
 def _block_mean(arr: np.ndarray, factor: int) -> np.ndarray:
     """Block-average the last two spatial dims by `factor`.
 
@@ -28,6 +31,8 @@ class ROMSDownscalingDataset(Dataset):
     into a single numpy array during __init__.  Every subsequent operation
     (valid_time_idx, compute_stats, __getitem__) works entirely in RAM,
     eliminating per-sample disk IO that was the dominant bottleneck.
+    Loading uses time blocks targeting 64 MiB (at least one timestep);
+    validity checks use one spatial field at a time to avoid full-data copies.
     """
 
     def __init__(
@@ -69,13 +74,20 @@ class ROMSDownscalingDataset(Dataset):
         self.field_shape = (ny, nx)
         self.total_times = n_times
 
-        # ── One zarr read per source into a preallocated (S, T, V, Y, X) array ──
+        # Load bounded time blocks into the preallocated (S, T, V, Y, X) array.
         self._data = np.empty((len(stores), n_times, len(all_vars), ny, nx), dtype=np.float32)
         for s, (p, ds_zarr) in enumerate(zip(paths, stores)):
             print(f"Loading {len(all_vars)} variable(s) from {p}...", flush=True)
             var_to_idx = {var: i for i, var in enumerate(ds_zarr.attrs.get('variables', []))}
             data_da = ds_zarr['data'].isel(variable=[var_to_idx[v] for v in all_vars]).transpose('time', 'variable', 'cell')
-            self._data[s] = data_da.load().values.reshape(n_times, len(all_vars), ny, nx)
+            bytes_per_time = len(all_vars) * ny * nx * data_da.dtype.itemsize
+            block_times = max(1, _LOAD_BLOCK_BYTES // max(1, bytes_per_time))
+            for start in range(0, n_times, block_times):
+                stop = min(start + block_times, n_times)
+                block = data_da.isel(time=slice(start, stop)).load()
+                self._data[s, start:stop] = block.values.reshape(stop - start, len(all_vars), ny, nx)
+                del block
+            del data_da
         self.n_sources = len(stores)
         print(f"Loaded {self.n_sources} source(s) x {self.total_times} timesteps into RAM "
               f"({self._data.nbytes / 1024**2:.0f} MB).", flush=True)
@@ -141,11 +153,14 @@ class ROMSDownscalingDataset(Dataset):
         return ((arr - mean) / std).astype(np.float32)
 
     def _valid_samples(self) -> list[tuple[int, int]]:
-        """Vectorised: find (source, time) pairs where at least one target cell is finite."""
+        """Find valid pairs in source/time order with one field-sized mask."""
         target_indices = [self._var_to_arr_idx[v] for v in self.target_vars]
-        target_data = self._data[:, :, target_indices]               # (S, T, n_target, Y, X)
-        has_finite = np.isfinite(target_data).any(axis=(2, 3, 4))    # (S, T)
-        return [(int(s), int(t)) for s, t in zip(*np.where(has_finite))]
+        samples = []
+        for s in range(self._data.shape[0]):
+            for t in range(self._data.shape[1]):
+                if any(np.isfinite(self._data[s, t, v]).any() for v in target_indices):
+                    samples.append((s, t))
+        return samples
 
     def _compute_stats(self, var_names: list[str], coarsen: bool = False,
                        sample_indices: list[int] | None = None) -> dict[str, dict[str, float]]:
