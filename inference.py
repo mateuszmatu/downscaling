@@ -59,9 +59,9 @@ def main(checkpoint_path: Path, input_netcdf: list[Path], output_netcdf: Path, b
 
     #still only surface
     if len(input_netcdf) == 1:
-        ids = xr.open_dataset(input_netcdf[0]).isel(depth=0)
+        ids = xr.open_dataset(input_netcdf[0])#.isel(depth=0)
     elif len(input_netcdf) > 1:
-        ids = xr.open_mfdataset(input_netcdf, combine='by_coords').isel(depth=0)
+        ids = xr.open_mfdataset(input_netcdf, combine='by_coords')#.isel(depth=0)
     else:
         raise ValueError("No input NetCDF files provided.")
     
@@ -85,7 +85,7 @@ def main(checkpoint_path: Path, input_netcdf: list[Path], output_netcdf: Path, b
         for var in static_var_names:
             smean = static_stats[var]["mean"]
             sstd = static_stats[var]["std"]
-            hds_da = ids[var]
+            hds_da = ids['h']
             if 'time' in hds_da.dims:
                 hds_da = hds_da.isel(time=t)
             hds = hds_da.coarsen(X=5, Y=5, boundary='trim').mean().values
@@ -185,11 +185,13 @@ def main(checkpoint_path: Path, input_netcdf: list[Path], output_netcdf: Path, b
 if __name__ == "__main__":
     import plot_func as pf
     checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp7/model_epoch_last.pt")
-    #checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp7/best_model.pt")
-    input_netcdf = [Path('/home/mateuszm/downscaling/test_data/norkyst160_his_zdepth_20260912T00Z_m71_AN.nc'),
-                    #Path('/home/mateuszm/downscaling/test_data/norkyst160_his_zdepth_20260913T00Z_m71_AN.nc'),
-                    #Path('/home/mateuszm/downscaling/test_data/norkyst160_his_zdepth_20260914T00Z_m71_AN.nc')
+    checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp11/best_model.pt")
+    input_netcdf = [Path('/lustre/storeB/project/fou/hi/oper/norkyst_v3/forecast/his_zdepths/2026/09/14/norkyst160_his_zdepth_20260914T00Z_m70_AN.nc')
+    #    Path('/home/mateuszm/downscaling/test_data/norkyst160_his_zdepth_20260912T00Z_m71_AN.nc'),
+    #                Path('/home/mateuszm/downscaling/test_data/norkyst160_his_zdepth_20260913T00Z_m71_AN.nc'),
+    #                Path('/home/mateuszm/downscaling/test_data/norkyst160_his_zdepth_20260914T00Z_m71_AN.nc')
     ]
+    input_netcdf = [Path('/lustre/storeB/users/mateuszm/NF160/cutout-regions/A06_1/norfjords_160m_his.nc4_2024010101-2024010200_zdepth_A06_1')]
     output_netcdf = Path('results/field.nc')
     main(checkpoint_path, input_netcdf, output_netcdf)
     #ds_result = xr.open_dataset('results/predicted_temperature.nc')
