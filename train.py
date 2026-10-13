@@ -1,5 +1,7 @@
 
 import dataloader_improved as dataloader
+#import dataloader_eff as dataloader
+#import dataloader_new as dataloader
 import time
 import torch
 from pathlib import Path
@@ -185,7 +187,9 @@ def main(
     dataset = dataloader.ROMSDownscalingDataset(data_dir=data_dir,
                                                 input_vars=['u_eastward_0', 'v_northward_0'],
                                                 target_vars=['u_eastward_0', 'v_northward_0'],
-                                                static_vars=['h_0'])
+                                                static_vars=['h_0'],
+                                                #memmap_dir=checkpoint_output_dir
+                                                )
 
     datasets = train_val_dataset(dataset, val_split=val_split)
     train_dataset = datasets['train']
@@ -194,9 +198,9 @@ def main(
     dataset.input_stats = dataset._compute_stats(dataset.input_vars, coarsen=True, sample_indices=train_dataset.indices)
     dataset.target_stats = dataset._compute_stats(dataset.target_vars, coarsen=False, sample_indices=train_dataset.indices)
     input_stats, target_stats, static_stats = dataset.input_stats, dataset.target_stats, dataset.static_stats
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=torch.cuda.is_available(), persistent_workers=False, prefetch_factor=None)
+    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, num_workers=0, pin_memory=torch.cuda.is_available(), persistent_workers=False, prefetch_factor=None)
 
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=torch.cuda.is_available())
-    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, num_workers=0, pin_memory=torch.cuda.is_available())
     sample = dataset[0]
     cond_channels = sample["input"].shape[0]
     target_channels = sample["target"].shape[0]
@@ -298,16 +302,18 @@ def main(
 
 
 if __name__ == "__main__":  
-    data = Path('/home/mateuszm/downscaling_1/zarr/test.zarr')
-    data = [Path('/home/mateuszm/downscaling/yaml/A01_1_test.zarr'), Path('/home/mateuszm/downscaling/yaml/A01_2_test.zarr')]
-    #data = Path('/home/mateuszm/downscaling/yaml/A01_1_test.zarr')
-    #data = Path('/home/mateuszm/downscaling_1/zarr/nk160_m71_20240501-20260531.zarr')
+    data = [Path('/lustre/storeB/users/mateuszm/NF160/zarr/A01_1.zarr'),
+            #Path('/lustre/storeB/users/mateuszm/NF160/zarr/A01_2.zarr'),
+            #Path('/lustre/storeB/users/mateuszm/NF160/zarr/A02_1.zarr'),
+            #Path('/lustre/storeB/users/mateuszm/NF160/zarr/A03_1.zarr'),
+            Path('/lustre/storeB/users/mateuszm/NF160/zarr/A04_1.zarr'),
+            ]
     main(
         data,
         val_split=0.2,
-        checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp1'),
-        log_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp1'),
-        max_epochs=200,
+        checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp11'),
+        log_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp11'),
+        max_epochs=50,
         lr = 1e-3,
         residuals=True,
     )
