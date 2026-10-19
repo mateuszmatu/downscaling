@@ -2,12 +2,12 @@
 #$ -l h_rt=72:00:00
 #$ -q bigmem-r8.q
 #$ -l h_rss=80G,mem_free=80G,h_data=80G
-#$ -o /home/mateuszm/downscaling/preprocess_norfjord/logs/
-#$ -e /home/mateuszm/downscaling/preprocess_norfjord/logs/
-#$ -N anemoi-datasets-A13_1
+#$ -o /lustre/storeB/users/mateuszm/NF160/logs/
+#$ -e /lustre/storeB/users/mateuszm/NF160/logs/
+#$ -N anemoi-datasets-A09_2
 
 
-DOMAIN=A13_1
+DOMAIN=A09_2
 
 
 
