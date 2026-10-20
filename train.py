@@ -302,18 +302,18 @@ def main(
 
 
 if __name__ == "__main__":  
-    data = [Path('/lustre/storeB/users/mateuszm/NF160/zarr/A01_1.zarr'),
+    data = [#Path('/lustre/storeB/users/mateuszm/NF160/zarr/A01_1.zarr'),
             #Path('/lustre/storeB/users/mateuszm/NF160/zarr/A01_2.zarr'),
-            #Path('/lustre/storeB/users/mateuszm/NF160/zarr/A02_1.zarr'),
-            #Path('/lustre/storeB/users/mateuszm/NF160/zarr/A03_1.zarr'),
+            Path('/lustre/storeB/users/mateuszm/NF160/zarr/A02_1.zarr'),
+            Path('/lustre/storeB/users/mateuszm/NF160/zarr/A03_1.zarr'),
             Path('/lustre/storeB/users/mateuszm/NF160/zarr/A04_1.zarr'),
             ]
     main(
         data,
         val_split=0.2,
-        checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp11'),
-        log_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp11'),
-        max_epochs=50,
-        lr = 1e-3,
+        checkpoint_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp12'),
+        log_output_dir=Path('/lustre/storeB/users/mateuszm/downscaling/exp12'),
+        max_epochs=100,
+        lr = 1e-4,
         residuals=True,
     )
