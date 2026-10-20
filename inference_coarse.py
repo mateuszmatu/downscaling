@@ -6,6 +6,10 @@ Example (surface velocities and bathymetry must already be on the same grid):
     result = downscale(ds_800m, "checkpoints/best_model.pt")
     result.to_netcdf("prediction_160m.nc")
 
+For separate fine bathymetry, pass landmask=landmask (a Dataset containing h,
+or the h DataArray). The static h forcing then retains its 160m resolution;
+any coarse input/target bathymetry still comes from ds_800m.
+
 The default spatial dimensions are Y/X; y/Y and x/X are interchangeable when
 resolving dimension names, and output retains the input's actual names.
 Select depth/ensemble dimensions before calling, or pass spatial_dims for a
@@ -62,6 +66,7 @@ def downscale(
     dataset: xr.Dataset,
     checkpoint_path: str | Path,
     *,
+    landmask: xr.Dataset | xr.DataArray | None = None,
     variable_map: Mapping[str, str] | None = None,
     spatial_dims: tuple[str, str] = ('Y', 'X'),
     time_dim: str = 'time',
@@ -80,6 +85,12 @@ def downscale(
     The caller must supply an 800m grid in the same physical conventions as
     training (eastward/northward surface velocities and bathymetry). No vector
     rotation or regridding between different projections is performed.
+
+    landmask supplies static h forcing on the aligned 160m output grid, with
+    exactly five times as many cells along each spatial dimension. Values are
+    normalized with checkpoint static statistics, without coarsening. Other
+    forcing channels are interpolated to 160m before concatenation. This differs
+    from training with coarse static forcing; output masks remain unchanged.
     """
     if not isinstance(dataset, xr.Dataset):
         raise TypeError("dataset must be an xarray.Dataset.")
@@ -117,6 +128,40 @@ def downscale(
     static_stats = _statistics(checkpoint, 'static_stats')
     input_names, target_names = list(input_stats), list(target_stats)
     static_names = list(static_stats)
+    fine_h = None
+    fine_h_name = None
+    if landmask is not None:
+        h_names = [name for name in static_names if name.removesuffix('_0') == 'h']
+        if len(h_names) != 1 or h_names[0] in input_names:
+            raise ValueError("Fine bathymetry requires a separate static h or h_0 checkpoint channel.")
+        fine_h_name = h_names[0]
+        if isinstance(landmask, xr.Dataset):
+            if 'h' not in landmask:
+                raise ValueError("landmask must contain the 160m h variable.")
+            landmask = landmask['h']
+        if not isinstance(landmask, xr.DataArray):
+            raise TypeError("landmask must be an h DataArray or a Dataset containing h.")
+        if set(landmask.dims) != set(spatial_dims):
+            raise ValueError(f"160m h must have only dimensions {spatial_dims}.")
+        if tuple(landmask.sizes[dim] for dim in spatial_dims) != (ny * 5, nx * 5):
+            raise ValueError(f"160m h must have shape {(ny * 5, nx * 5)} on the output grid.")
+        arr = np.asarray(landmask.transpose(y_dim, x_dim).values, dtype=np.float32)
+        statistics = static_stats[fine_h_name]
+        # Consider valid ocean cells where h is finite and greater than 5 (h > 5).
+        # Many grids encode land as a positive sentinel (e.g. h == 5) — treat h <= 5
+        # and NaN/negative as land/masking. This matches the observed dataset.
+        ocean = np.isfinite(arr) & (arr > 5)
+        normalized = (
+            np.where(ocean, arr, statistics['mean']) - statistics['mean']
+        ) / statistics['std']
+        fine_h = torch.from_numpy(normalized.astype(np.float32))[None, None].to(selected_device)
+        # Create a boolean mask of ocean cells on the fine grid (True where h > 5).
+        # Keep on CPU until applied to avoid unnecessary device usage.
+        fine_h_mask = torch.from_numpy(ocean.astype(bool))[None, None]
+        # Describe mask behavior for output metadata when fine h is supplied.
+        mask_description = 'Nearest-neighbor coarse finite-value masks; fine coastline supplied from provided h.'
+    else:
+        mask_description = 'Nearest-neighbor coarse finite-value masks; no fine coastline supplied.'
     state_key = 'ema_model_state_dict' if use_ema else 'model_state_dict'
     state = {
         key.removeprefix('_orig_mod.'): value
@@ -149,6 +194,8 @@ def downscale(
     if unknown:
         raise ValueError(f"variable_map contains unknown checkpoint variables: {sorted(unknown)}")
     for name in names:
+        if name == fine_h_name:
+            continue
         alias = name.removesuffix('_0')
         variable = variable_map.get(name, name if name in dataset else alias)
         if variable not in dataset:
@@ -184,6 +231,10 @@ def downscale(
     for index in range(n_times):
         parts, masks = [], []
         for channel, name in enumerate(names):
+            if name == fine_h_name:
+                # Reserve this channel; its fine-grid values are inserted below.
+                parts.append(torch.zeros((ny, nx), dtype=torch.float32))
+                continue
             arr = field_values(name, index)
             statistics = input_stats[name] if name in input_stats else static_stats[name]
             finite = np.isfinite(arr)
@@ -193,9 +244,16 @@ def downscale(
             normalized = (np.where(finite, arr, statistics['mean']) - statistics['mean']) / statistics['std']
             parts.append(torch.from_numpy(normalized.astype(np.float32)))
         cond = torch.stack(parts)[None].to(selected_device)
+        model_cond = cond
+        if fine_h is not None and fine_h_name is not None:
+            model_cond = F.interpolate(
+                cond, size=output_shape, mode='bilinear', align_corners=False,
+            )
+            h_channel = names.index(fine_h_name)
+            model_cond[:, h_channel:h_channel + 1] = fine_h
         x0 = torch.zeros((1, out_channels, *output_shape), device=selected_device)
         t0 = torch.zeros(1, dtype=torch.long, device=selected_device)
-        prediction = model(x0, cond, t0)
+        prediction = model(x0, model_cond, t0)
         if not torch.isfinite(prediction).all():
             raise RuntimeError(f"Model returned non-finite predictions at timestep {index}.")
         predicted_physical = prediction * target_std + target_mean
@@ -220,10 +278,19 @@ def downscale(
                 mode='bilinear', align_corners=False,
             )
         target_masks = torch.stack([masks[input_names.index(name)] for name in target_names])
-        valid = F.interpolate(
-            target_masks[None].to(selected_device, dtype=torch.float32),
-            size=output_shape, mode='nearest',
-        ).bool()
+        if fine_h is not None and fine_h_name is not None:
+            # Use provided 160m h finite-values as the output validity mask, matching how
+            # h_0 was treated during training (finite h indicates valid ocean cells).
+            # fine_h_mask shape: [1,1,H,W] on CPU — move to device and repeat across channels.
+            fine_mask_dev = fine_h_mask.to(selected_device, dtype=torch.bool)
+            # Expand to [1, out_channels, H, W] where out_channels == len(target_names)
+            valid = fine_mask_dev.repeat(1, len(target_names), 1, 1)
+            # Ensure batch dimension is present for masked_fill compatibility with prediction.
+        else:
+            valid = F.interpolate(
+                target_masks[None].to(selected_device, dtype=torch.float32),
+                size=output_shape, mode='nearest',
+            ).bool()
         predictions[index] = predicted_physical.masked_fill(~valid, float('nan'))[0].cpu().numpy()
         corrections[index] = (predicted_physical - baseline).masked_fill(
             ~valid, float('nan'),
@@ -236,7 +303,7 @@ def downscale(
         'checkpoint': str(checkpoint_path), 'checkpoint_weights': 'ema' if use_ema else 'model',
         'input_resolution_m': 800, 'output_resolution_m': 160,
         'residual_reconstruction': int(residuals),
-        'mask_description': 'Nearest-neighbor coarse finite-value masks; no fine coastline supplied.',
+        'mask_description': mask_description,
     })
     output = output.assign_coords({
         y_dim: fine_y, x_dim: fine_x,
@@ -273,15 +340,27 @@ def downscale(
 
 if __name__ == "__main__":
     import plot_func
-    file = 'https://thredds.met.no/thredds/dodsC/fou-hi/norkystv3_his_files/2026/10/03/norkyst800_his_zdepth_20261003T00Z_m00_AN.nc'
-    file = 'https://thredds.met.no/thredds/dodsC/fou-hi/norkystv3_his_files/2026/06/06/norkyst800_his_zdepth_20260606T00Z_m71_AN.nc'
-    ds_800m = xr.open_dataset(file).isel(time=slice(0,3),depth=0, X=slice(1660,1800), Y=slice(660, 800))
+    grid = '/lustre/storeB/users/mateuszm/NF160/landmask/norkyst_160m_grd_glued.nc'
+    file = 'https://thredds.met.no/thredds/dodsC/fou-hi/norkystv3_his_files/2026/10/12/norkyst800_his_zdepth_20261012T00Z_m00_AN.nc'
+    file = 'https://thredds.met.no/thredds/dodsC/fou-hi/norkystv3_his_files/2026/10/15/norkyst800_his_zdepth_20261015T00Z_m71_AN.nc'
 
+    xmin = 640
+    xmax = 780
+    ymin = 140
+    ymax = 280
+
+    ds_800m = xr.open_dataset(file).isel(depth=0, X=slice(xmin, xmax), Y=slice(ymin, ymax))
+    landmask = xr.open_dataset(grid).isel(xi_rho=slice(xmin*5, xmax*5), eta_rho=slice(ymin*5, ymax*5))
+    landmask = landmask.rename({'xi_rho': 'X', 'eta_rho': 'Y'})
+    
     checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp11/best_model.pt")
+    checkpoint_path = Path("/lustre/storeB/users/mateuszm/downscaling/exp11/model_epoch_last.pt")
+    print('inference starting')
     result = downscale(
     ds_800m,
     checkpoint_path,
-    spatial_dims=("X", "Y"),
+    landmask=landmask['h'],
+    spatial_dims=("Y", "X"),
     variable_map={
         "u_eastward_0": "u_eastward",
         "v_northward_0": "v_northward",
